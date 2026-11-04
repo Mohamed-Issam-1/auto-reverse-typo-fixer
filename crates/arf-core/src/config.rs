@@ -134,6 +134,7 @@ pub const DEFAULT_BLACKLIST: &[&str] = &[
     "mstsc.exe",
     "vmware.exe",
     "virtualbox.exe",
+    "notepad.exe",
 ];
 
 impl Default for AppConfig {
@@ -339,6 +340,11 @@ mod tests {
         assert_eq!(Hotkey::parse("shift+f9").unwrap().display(), "Shift+F9");
     }
 
+    #[test]
+    fn notepad_is_blacklisted_by_default() {
+        let cfg = AppConfig::default();
+        assert!(cfg.blacklist.iter().any(|app| app == "notepad.exe"));
+    }
     #[test]
     fn default_hotkey() {
         assert_eq!(AppConfig::default().undo_hotkey.vk, 0x5A);
