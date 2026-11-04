@@ -83,6 +83,11 @@ impl App {
 
     pub fn run(mut self) {
         loop {
+            if !hook::event_stream_healthy() {
+                self.engine.on_break();
+                eprintln!("error: keyboard event queue overflow/disconnect; corrections disabled until restart");
+                return;
+            }
             let ev = match self.pending.pop_front() {
                 Some(e) => e,
                 None => match self.rx.recv_timeout(Duration::from_secs(1)) {
@@ -100,6 +105,10 @@ impl App {
     }
 
     fn handle(&mut self, ev: RawEvent) {
+        if !hook::event_stream_healthy() {
+            self.engine.on_break();
+            return;
+        }
         match ev {
             RawEvent::Mouse | RawEvent::Foreign => self.engine.on_break(),
             RawEvent::Key { vk, scan, extended, down, activity } => {
@@ -244,9 +253,11 @@ impl App {
     /// the same control. Check the physical-input generation on both sides of
     /// the Win32/UIA focus check to reject an intervening press.
     fn safe_for_activity(&mut self, ctx: &FocusCtx, epoch: u64, activity: u64) -> bool {
-        hook::activity_is_current(activity)
+        hook::event_stream_healthy()
+            && hook::activity_is_current(activity)
             && self.still_safe(ctx, epoch)
             && hook::activity_is_current(activity)
+            && hook::event_stream_healthy()
     }
 
     fn on_space(&mut self, now: u64, ctx: &FocusCtx, epoch: u64, activity: u64) {

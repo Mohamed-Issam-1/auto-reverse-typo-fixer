@@ -2,12 +2,70 @@
 //! Windows silently drops hooks whose callbacks take too long (LowLevelHooksTimeout).
 
 use crate::sys::*;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::Sender;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{self, SyncSender};
 use std::sync::OnceLock;
 
 /// Marks events injected by this program ("ARFT").
 pub const SIGNATURE: usize = 0x4152_4654;
+
+/// Hard cap on pending raw keyboard/mouse events. Never block a hook callback.
+pub const INPUT_QUEUE_CAPACITY: usize = 2048;
+
+/// Once an event is lost, the worker's view of the typed text cannot be trusted.
+/// Disable all correction until the process restarts, even if the queue later drains.
+#[derive(Default)]
+struct DeliveryState {
+    failed: AtomicBool,
+}
+
+impl DeliveryState {
+    fn healthy(&self) -> bool {
+        !self.failed.load(Ordering::Acquire)
+    }
+
+    fn try_deliver(&self, tx: &SyncSender<RawEvent>, event: RawEvent) -> bool {
+        if !self.healthy() {
+            return false;
+        }
+        if tx.try_send(event).is_err() {
+            self.failed.store(true, Ordering::Release);
+            return false;
+        }
+        true
+    }
+}
+
+static EVENT_DELIVERY: DeliveryState = DeliveryState { failed: AtomicBool::new(false) };
+
+/// The worker must never rewrite text after even one dropped hook event.
+pub fn event_stream_healthy() -> bool {
+    EVENT_DELIVERY.healthy()
+}
+
+/// No real hooks or input are involved. This exercises the bounded queue and
+/// its permanent fail-closed transition using synthetic events only.
+pub fn run_input_queue_stress() -> i32 {
+    let (tx, rx) = mpsc::sync_channel(INPUT_QUEUE_CAPACITY);
+    let delivery = DeliveryState::default();
+    let started = std::time::Instant::now();
+    let mut accepted = 0usize;
+    for _ in 0..100_000 {
+        if delivery.try_deliver(&tx, RawEvent::Mouse) {
+            accepted += 1;
+        }
+    }
+    let elapsed = started.elapsed();
+    let queued = rx.try_iter().count();
+    let passed = accepted == INPUT_QUEUE_CAPACITY
+        && queued == INPUT_QUEUE_CAPACITY
+        && !delivery.healthy();
+    println!("Synthetic input queue: capacity={} accepted={} buffered={} in {:?}",
+        INPUT_QUEUE_CAPACITY, accepted, queued, elapsed);
+    println!("Overflow permanently disables correction: {}", !delivery.healthy());
+    println!("No keyboard hooks, COM, user text, or injection were accessed.");
+    if passed { 0 } else { 1 }
+}
 
 /// Monotonic generation for physical key presses, mouse clicks, and foreign input.
 /// It is updated in the low-level hook BEFORE the event is queued for the worker.
@@ -55,11 +113,15 @@ impl RawEvent {
     }
 }
 
-static TX: OnceLock<Sender<RawEvent>> = OnceLock::new();
+static TX: OnceLock<SyncSender<RawEvent>> = OnceLock::new();
 
 fn emit(ev: RawEvent) {
     if let Some(tx) = TX.get() {
-        let _ = tx.send(ev);
+        if !EVENT_DELIVERY.try_deliver(tx, ev) {
+            // Also invalidate any in-flight correction token. A lost event is
+            // irrecoverable: the worker will stop correcting for this session.
+            INPUT_ACTIVITY.note_input();
+        }
     }
 }
 
@@ -104,7 +166,7 @@ pub struct Hooks {
 }
 
 impl Hooks {
-    pub fn install(tx: Sender<RawEvent>) -> Result<Hooks, String> {
+    pub fn install(tx: SyncSender<RawEvent>) -> Result<Hooks, String> {
         TX.set(tx).map_err(|_| "hooks already installed".to_string())?;
         unsafe {
             let module = GetModuleHandleW(std::ptr::null());
@@ -163,5 +225,28 @@ mod activity_tests {
         // A key-up event reads current(), without advancing the generation.
         assert_eq!(clock.current(), press);
         assert!(clock.matches(press));
+    }
+
+    #[test]
+    fn overflow_disables_delivery_permanently_even_after_drain() {
+        let (tx, rx) = mpsc::sync_channel(2);
+        let state = DeliveryState::default();
+        assert!(state.try_deliver(&tx, RawEvent::Mouse));
+        assert!(state.try_deliver(&tx, RawEvent::Foreign));
+        assert!(!state.try_deliver(&tx, RawEvent::Mouse));
+        assert!(!state.healthy());
+        assert_eq!(rx.try_iter().count(), 2);
+        // Once events have been dropped, do not resume with an incomplete run.
+        assert!(!state.try_deliver(&tx, RawEvent::Mouse));
+        assert!(!state.healthy());
+    }
+
+    #[test]
+    fn disconnected_consumer_disables_delivery() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        drop(rx);
+        let state = DeliveryState::default();
+        assert!(!state.try_deliver(&tx, RawEvent::Mouse));
+        assert!(!state.healthy());
     }
 }

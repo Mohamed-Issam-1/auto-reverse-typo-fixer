@@ -16,7 +16,7 @@ use arf_core::{Engine, Key, KeyboardLayout, Lang};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
-const USAGE: &str = "arf-win [--config <file>] [--dict-dir <dir>] [--selftest] [--inject-test] [--uia-selftest] [--uia-watch] [--uia-event-watch] [--uia-guard-watch] [--uia-guard-bench]\n\
+const USAGE: &str = "arf-win [--config <file>] [--dict-dir <dir>] [--selftest] [--inject-test] [--uia-selftest] [--uia-watch] [--uia-event-watch] [--uia-guard-watch] [--uia-guard-bench] [--input-queue-stress]\n\
   --selftest      print detected layouts and how the keys for \"hgsghl\" translate under each\n\
   --inject-test   after 5 s types test lines into the focused window (use it to diagnose an app)";
 
@@ -117,6 +117,9 @@ pub fn run() -> i32 {
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
+            "--input-queue-stress" => {
+                return crate::hook::run_input_queue_stress();
+            }
             "--uia-guard-bench" => {
                 #[cfg(windows)]
                 { return uia_guard::run_guard_bench(); }
@@ -178,7 +181,8 @@ pub fn run() -> i32 {
     }
 
     let engine = Engine::new(cfg.engine.clone(), build_validator(&dict_dir), registry);
-    let (tx, rx) = mpsc::channel();
+    // Bounded channel: an overflow is terminal and fail-closed, never silent.
+    let (tx, rx) = mpsc::sync_channel(crate::hook::INPUT_QUEUE_CAPACITY);
     let hooks = match Hooks::install(tx) {
         Ok(h) => h,
         Err(e) => {
