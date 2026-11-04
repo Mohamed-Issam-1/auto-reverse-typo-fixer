@@ -41,6 +41,8 @@ pub struct UiaGuard {
     epoch: Arc<AtomicU64>,
     latest: Arc<Mutex<Option<Cached>>>,
     stop: Arc<AtomicBool>,
+    // Terminal monitoring failure must revoke cached permissions immediately.
+    monitor_healthy: Arc<AtomicBool>,
 }
 
 impl UiaGuard {
@@ -49,6 +51,7 @@ impl UiaGuard {
             epoch: Arc::new(AtomicU64::new(0)),
             latest: Arc::new(Mutex::new(None)),
             stop: Arc::new(AtomicBool::new(false)),
+            monitor_healthy: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -60,14 +63,28 @@ impl UiaGuard {
             let epoch = Arc::clone(&guard.epoch);
             let latest = Arc::clone(&guard.latest);
             let stop = Arc::clone(&guard.stop);
+            let monitor_healthy = Arc::clone(&guard.monitor_healthy);
             let spawned = std::thread::Builder::new()
                 .name("arf-uia-safety".to_owned())
                 .spawn(move || {
-                    if let Err(error) = run_monitor(epoch, latest, stop) {
-                        eprintln!("warning: UIA safety monitor unavailable: {error}; correction remains blocked");
+                    // A provider may error or panic. Neither can leave a previously
+                    // approved cached focus usable after the monitor exits.
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        run_monitor(Arc::clone(&epoch), Arc::clone(&latest), stop)
+                    }));
+                    mark_monitor_stopped(&monitor_healthy, &epoch, &latest);
+                    match result {
+                        Ok(Err(error)) => eprintln!(
+                            "warning: UIA safety monitor unavailable: {error}; correction remains blocked"
+                        ),
+                        Err(_) => eprintln!(
+                            "warning: UIA safety monitor panicked; correction remains blocked"
+                        ),
+                        Ok(Ok(())) => {}
                     }
                 });
             if let Err(error) = spawned {
+                mark_monitor_stopped(&guard.monitor_healthy, &guard.epoch, &guard.latest);
                 eprintln!("warning: cannot spawn UIA safety monitor: {error}; correction remains blocked");
             }
         }
@@ -77,12 +94,16 @@ impl UiaGuard {
     /// Cheap read on the keyboard worker. Fail closed for missing/stale data,
     /// process/window mismatch, or an event racing with this read.
     pub fn verdict(&self, current: WinFocus) -> UiaVerdict {
+        let monitor_before = self.monitor_healthy.load(Ordering::Acquire);
         let before = self.epoch.load(Ordering::Acquire);
         let cached = self.latest.lock().ok().and_then(|value| *value);
         let after = self.epoch.load(Ordering::Acquire);
+        let monitor_after = self.monitor_healthy.load(Ordering::Acquire);
         let safety = match cached {
             Some(entry)
-                if current.pid > 0
+                if monitor_before
+                    && monitor_after
+                    && current.pid > 0
                     && current.hwnd != 0
                     && before == after
                     && entry.epoch == after
@@ -96,6 +117,20 @@ impl UiaGuard {
             _ => FocusSafety::Unknown,
         };
         UiaVerdict { epoch: after, safety }
+    }
+}
+
+/// Revoke every authorization as soon as the monitor stops. A stalled monitor
+/// is additionally guarded by MAX_SAMPLE_AGE even if no exit is observable.
+fn mark_monitor_stopped(
+    healthy: &AtomicBool,
+    epoch: &AtomicU64,
+    latest: &Mutex<Option<Cached>>,
+) {
+    healthy.store(false, Ordering::Release);
+    epoch.fetch_add(1, Ordering::AcqRel);
+    if let Ok(mut value) = latest.lock() {
+        *value = None;
     }
 }
 
@@ -193,6 +228,87 @@ fn run_monitor(
     let cleanup = unsafe { automation.RemoveFocusChangedEventHandler(&handler) }
         .map_err(|e| format!("Cannot unregister focus handler: {e}"));
     result.and(cleanup)
+}
+
+/// Read-only probe of real UIA query latency and classification. It runs in
+/// its own thread and uses a bounded wait so a stuck provider does not hang
+/// the caller. It never installs keyboard hooks or reads control contents.
+#[cfg(windows)]
+pub fn run_guard_probe() -> i32 {
+    const COUNT: usize = 15;
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let spawned = std::thread::Builder::new()
+        .name("arf-uia-probe".to_string())
+        .spawn(move || {
+            println!("Focus a dummy normal/password field within 3 seconds.");
+            std::thread::sleep(Duration::from_secs(3));
+            let mut latencies = Vec::with_capacity(COUNT);
+            let mut good = 0usize;
+            let mut errors = 0usize;
+            for index in 0..COUNT {
+                let started = Instant::now();
+                let result = crate::uia::query_focused();
+                let elapsed = started.elapsed();
+                latencies.push(elapsed);
+                let class = match result {
+                    Ok((pid, safety)) if pid > 0 => {
+                        good += 1;
+                        safety
+                    }
+                    _ => {
+                        errors += 1;
+                        FocusSafety::Unknown
+                    }
+                };
+                println!("UIA probe {}/{}: {:?}, {:.3} ms",
+                    index + 1, COUNT, class, elapsed.as_secs_f64() * 1000.0);
+                std::thread::sleep(Duration::from_millis(80));
+            }
+            latencies.sort_unstable();
+            let p50 = latencies[COUNT / 2].as_secs_f64() * 1000.0;
+            let p95_index = (((COUNT * 95 + 99) / 100) - 1).min(COUNT - 1);
+            let p95 = latencies[p95_index].as_secs_f64() * 1000.0;
+            let maximum = latencies[COUNT - 1].as_secs_f64() * 1000.0;
+            println!("UIA probe summary: success={} errors={} p50={:.3}ms p95={:.3}ms max={:.3}ms",
+                good, errors, p50, p95, maximum);
+            println!("No text, keyboard hooks, or injected input were accessed.");
+            let _ = sender.try_send(good > 0);
+        });
+    if let Err(error) = spawned {
+        eprintln!("Cannot spawn UIA probe: {error}");
+        return 1;
+    }
+    match receiver.recv_timeout(Duration::from_secs(15)) {
+        Ok(true) => 0,
+        Ok(false) => { eprintln!("All UIA probe requests failed."); 1 }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            eprintln!("UIA probe exceeded 15 seconds; possible blocked provider.");
+            1
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            eprintln!("UIA probe worker stopped unexpectedly.");
+            1
+        }
+    }
+}
+
+/// Synthetic fail-closed check: no UIA/Win32 calls or keyboard hooks.
+#[cfg(windows)]
+pub fn run_guard_fault_test() -> i32 {
+    let guard = UiaGuard::empty();
+    let focus = WinFocus { hwnd: 100, focus: 101, pid: 42 };
+    *guard.latest.lock().unwrap() = Some(Cached {
+        sample: FocusSample { pid: 42, safety: FocusSafety::NonPassword },
+        win: focus, epoch: 0, checked_at: Instant::now(),
+    });
+    let before = guard.verdict(focus).allows_text();
+    mark_monitor_stopped(&guard.monitor_healthy, &guard.epoch, &guard.latest);
+    let after = guard.verdict(focus);
+    let cleared = guard.latest.lock().unwrap().is_none();
+    println!("Synthetic monitor failure: previously_allowed={} after={:?} cache_cleared={}",
+        before, after.safety, cleared);
+    println!("No UIA, Win32 hooks, input content, or injection were accessed.");
+    if before && !after.allows_text() && cleared { 0 } else { 1 }
 }
 
 /// Diagnostic only. No hooks, rewriting or input-content access.
@@ -307,6 +423,24 @@ mod tests {
     fn stale_samples_cannot_authorize_input() {
         let guard = UiaGuard::empty();
         record(&guard, FocusSafety::NonPassword, Duration::from_secs(2));
+        assert_eq!(guard.verdict(context()).safety, FocusSafety::Unknown);
+    }
+
+    #[test]
+    fn terminated_monitor_revokes_fresh_sample_and_clears_cache() {
+        let guard = UiaGuard::empty();
+        record(&guard, FocusSafety::NonPassword, Duration::ZERO);
+        assert!(guard.verdict(context()).allows_text());
+        mark_monitor_stopped(&guard.monitor_healthy, &guard.epoch, &guard.latest);
+        assert_eq!(guard.verdict(context()).safety, FocusSafety::Unknown);
+        assert!(guard.latest.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn terminated_monitor_cannot_reauthorize_even_with_new_cache() {
+        let guard = UiaGuard::empty();
+        mark_monitor_stopped(&guard.monitor_healthy, &guard.epoch, &guard.latest);
+        record(&guard, FocusSafety::NonPassword, Duration::ZERO);
         assert_eq!(guard.verdict(context()).safety, FocusSafety::Unknown);
     }
 }

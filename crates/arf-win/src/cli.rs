@@ -16,7 +16,7 @@ use arf_core::{Engine, Key, KeyboardLayout, Lang};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
-const USAGE: &str = "arf-win [--config <file>] [--dict-dir <dir>] [--selftest] [--inject-test] [--uia-selftest] [--uia-watch] [--uia-event-watch] [--uia-guard-watch] [--uia-guard-bench] [--input-queue-stress]\n\
+const USAGE: &str = "arf-win [--config <file>] [--dict-dir <dir>] [--selftest] [--inject-test] [--uia-selftest] [--uia-watch] [--uia-event-watch] [--uia-guard-watch] [--uia-guard-bench] [--input-queue-stress] [--uia-guard-probe] [--uia-guard-fault-test]\n\
   --selftest      print detected layouts and how the keys for \"hgsghl\" translate under each\n\
   --inject-test   after 5 s types test lines into the focused window (use it to diagnose an app)";
 
@@ -117,6 +117,18 @@ pub fn run() -> i32 {
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
+            "--uia-guard-fault-test" => {
+                #[cfg(windows)]
+                { return uia_guard::run_guard_fault_test(); }
+                #[cfg(not(windows))]
+                { eprintln!("Requires Windows"); return 1; }
+            }
+            "--uia-guard-probe" => {
+                #[cfg(windows)]
+                { return uia_guard::run_guard_probe(); }
+                #[cfg(not(windows))]
+                { eprintln!("Requires Windows"); return 1; }
+            }
             "--input-queue-stress" => {
                 return crate::hook::run_input_queue_stress();
             }
