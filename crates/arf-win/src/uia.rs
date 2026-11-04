@@ -20,7 +20,7 @@ pub fn classify(is_password: Option<bool>, has_focus: Option<bool>) -> FocusSafe
 }
 
 #[cfg(windows)]
-fn query_focused() -> Result<(i32, FocusSafety), String> {
+pub(crate) fn query_focused() -> Result<(i32, FocusSafety), String> {
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
     };
