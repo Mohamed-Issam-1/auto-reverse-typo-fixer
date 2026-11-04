@@ -1,0 +1,23 @@
+# %APPDATA%\AutoReverseTypoFixer\config.toml  (flat key = value, strictly validated)
+enabled = true
+sensitivity = "conservative"      # conservative | balanced | aggressive
+min_len = 3
+correct_from = ["ar", "en"]       # source layouts that may be corrected
+undo_hotkey = "ctrl+alt+z"
+undo_window_ms = 5000
+max_run_words = 10
+max_run_chars = 120
+idle_timeout_ms = 10000
+# blacklist = ["cmd.exe", "code.exe"]   # replaces the built-in default list
+
+# What happens after you press Undo (the auto-correction pause):
+#   "run"        until the current typing run ends: Enter/Tab, mouse click, focus change, shortcut, or 10 s idle (default)
+#   "none"       keep correcting immediately
+#   "words:N"    skip the next N words
+#   "seconds:N"  pause for N seconds
+after_undo = "run"
+
+overlay = true                    # small "corrected" marker near the caret
+switch_delay_ms = 25              # wait before switching the input language
+paced_injection = false           # inject slowly everywhere (diagnostics)
+paced_apps = ["notepad.exe"]      # apps that always use slow, paced injection

@@ -1,0 +1,9 @@
+[package]
+name = "arf-win"
+description = "Windows layer of Auto-Reverse Typo Fixer (hooks, injection, layout switching)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+arf-core = { path = "../arf-core" }

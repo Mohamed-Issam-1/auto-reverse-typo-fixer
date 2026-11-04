@@ -1,0 +1,9 @@
+[package]
+name = "arf-dictc"
+description = "Dictionary compiler: word list -> FST"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+arf-core = { path = "../arf-core" }

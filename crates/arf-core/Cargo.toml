@@ -1,0 +1,10 @@
+[package]
+name = "arf-core"
+description = "Platform-independent engine of Auto-Reverse Typo Fixer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+fst = "0.4"
+zeroize = "=1.8.1"
