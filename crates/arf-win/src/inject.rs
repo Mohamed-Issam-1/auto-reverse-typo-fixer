@@ -19,7 +19,6 @@ fn key_input(vk: u16, scan: u16, flags: u32) -> INPUT {
 }
 
 const SCAN_BACKSPACE: u16 = 0x0E;
-const SCAN_ENTER: u16 = 0x1C;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -67,12 +66,6 @@ fn char_inputs(unit: u16) -> [INPUT; 2] {
     ]
 }
 
-/// Deletes `backspaces` characters and types `text`. Output uses `KEYEVENTF_UNICODE`, so it does
-/// not depend on the layout that is active at that moment.
-pub fn send_replacement(backspaces: usize, text: &str, mode: Mode) -> Result<(), String> {
-    send_replacement_checked(backspaces, text, mode, || true)
-}
-
 /// Inject a replacement with a last-moment caller-supplied focus/activity gate.
 /// Automatic rewriting is restricted to ONE SendInput call. Even that call is
 /// not atomic with the target app's editing state and may fail partially.
@@ -109,18 +102,6 @@ pub fn send_replacement_checked(
     target_valid: impl FnMut() -> bool,
 ) -> Result<(), String> {
     send_replacement_via(backspaces, text, mode, target_valid, send)
-}
-
-/// Types text only (no deletion). Used by `--inject-test`.
-pub fn send_text(text: &str, mode: Mode) -> Result<(), String> {
-    send_replacement(0, text, mode)
-}
-
-pub fn send_enter() -> Result<(), String> {
-    send(&[
-        key_input(VK_RETURN, SCAN_ENTER, 0),
-        key_input(VK_RETURN, SCAN_ENTER, KEYEVENTF_KEYUP),
-    ])
 }
 
 /// Asks the foreground application to switch its input language.

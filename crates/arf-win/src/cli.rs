@@ -2,7 +2,6 @@
 
 use crate::app::App;
 use crate::hook::Hooks;
-use crate::inject::{self, Mode};
 use crate::layout_win;
 use crate::overlay::Overlay;
 use crate::uia;
@@ -16,9 +15,8 @@ use arf_core::{Engine, Key, KeyboardLayout, Lang};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
-const USAGE: &str = "arf-win [--config <file>] [--dict-dir <dir>] [--selftest] [--inject-test] [--uia-selftest] [--uia-watch] [--uia-event-watch] [--uia-guard-watch] [--uia-guard-bench] [--input-queue-stress] [--uia-guard-probe] [--uia-guard-fault-test]\n\
-  --selftest      print detected layouts and how the keys for \"hgsghl\" translate under each\n\
-  --inject-test   after 5 s types test lines into the focused window (use it to diagnose an app)";
+const USAGE: &str = "arf-win [--config <file>] [--dict-dir <dir>] [--selftest] [--uia-selftest] [--uia-watch] [--uia-event-watch] [--uia-guard-watch] [--uia-guard-bench] [--input-queue-stress] [--uia-guard-probe] [--uia-guard-fault-test]\n\
+  --selftest      print detected layouts and how the keys for \"hgsghl\" translate under each";
 
 fn load_fst(path: &Path) -> Option<Box<dyn Dictionary>> {
     let bytes = std::fs::read(path).ok()?;
@@ -38,39 +36,6 @@ fn build_validator(dir: &Path) -> Validator {
             seed_validator(true)
         }
     }
-}
-
-/// Types the same Arabic word through different injection paths so a problematic application
-/// (e.g. Notepad) can be diagnosed. Focus the target window within 5 seconds.
-pub fn inject_test() {
-    println!("Click into the target app (e.g. Notepad) now. Typing starts in 5 seconds...");
-    std::thread::sleep(std::time::Duration::from_secs(5));
-    let ar = "\u{0627}\u{0644}\u{0633}\u{0644}\u{0627}\u{0645}"; // السلام
-    let pause = || std::thread::sleep(std::time::Duration::from_millis(250));
-    let lines: [(&str, Mode, bool); 5] = [
-        ("A batch   : ", Mode::Batch, false),
-        ("B paced   : ", Mode::Paced, false),
-        ("C ascii   : hello", Mode::Batch, true),
-        ("D replace batch (xxxxxx -> word): ", Mode::Batch, false),
-        ("E replace paced (xxxxxx -> word): ", Mode::Paced, false),
-    ];
-    for (i, (label, mode, ascii_only)) in lines.iter().enumerate() {
-        let _ = inject::send_text(label, *mode);
-        pause();
-        if *ascii_only {
-            // label already contains the word
-        } else if i < 3 {
-            let _ = inject::send_text(ar, *mode);
-        } else {
-            let _ = inject::send_text("xxxxxx", *mode);
-            pause();
-            let _ = inject::send_replacement(6, ar, *mode);
-        }
-        pause();
-        let _ = inject::send_enter();
-        pause();
-    }
-    println!("Done. Look at the five lines in the target app and tell me which ones show the Arabic word.");
 }
 
 pub fn selftest() {
@@ -203,10 +168,6 @@ pub fn run() -> i32 {
                 selftest();
                 return 0;
             }
-            "--inject-test" => {
-                inject_test();
-                return 0;
-            }
             "--config" => config_path = args.next().map(PathBuf::from),
             "--dict-dir" => dict_dir = args.next().map(PathBuf::from).unwrap_or(dict_dir),
             _ => {
@@ -257,4 +218,14 @@ pub fn run() -> i32 {
     println!("Auto-Reverse Typo Fixer running. Press Ctrl+C to quit.");
     hooks.run_message_loop();
     0
+}
+
+#[cfg(test)]
+mod safety_cli_tests {
+    use super::USAGE;
+
+    #[test]
+    fn unsafe_injection_diagnostic_is_not_advertised() {
+        assert!(!USAGE.contains("inject-test"));
+    }
 }
