@@ -1,7 +1,7 @@
 //! Worker thread: turns raw hook events into engine calls and applies corrections.
 
 use crate::focus::{is_sensitive_host, FocusCtx, FocusMonitor};
-use crate::hook::RawEvent;
+use crate::hook::{self, RawEvent};
 use crate::inject::{self, Mode};
 use crate::overlay::Overlay;
 use crate::layout_win;
@@ -102,7 +102,9 @@ impl App {
     fn handle(&mut self, ev: RawEvent) {
         match ev {
             RawEvent::Mouse | RawEvent::Foreign => self.engine.on_break(),
-            RawEvent::Key { vk, scan, extended, down } => self.handle_key(vk, scan, extended, down),
+            RawEvent::Key { vk, scan, extended, down, activity } => {
+                self.handle_key(vk, scan, extended, down, activity)
+            }
         }
     }
 
@@ -111,7 +113,7 @@ impl App {
         h.vk == vk && h.ctrl == self.mods.ctrl && h.alt == self.mods.alt && h.shift == self.mods.shift && h.win == self.mods.win
     }
 
-    fn handle_key(&mut self, vk: u32, sc: u16, extended: bool, down: bool) {
+    fn handle_key(&mut self, vk: u32, sc: u16, extended: bool, down: bool, activity: u64) {
         if self.mods.update(vk, down) || !down {
             return;
         }
@@ -145,7 +147,7 @@ impl App {
         }
 
         if self.undo_hotkey_matches(vk) && self.engine.can_undo(now) {
-            self.do_undo(now, &ctx, verdict.epoch);
+            self.do_undo(now, &ctx, verdict.epoch, activity);
             return;
         }
         if self.mods.ctrl || self.mods.alt || self.mods.win {
@@ -160,7 +162,7 @@ impl App {
             return;
         }
         match sc {
-            scan::SPACE => self.on_space(now, &ctx, verdict.epoch),
+            scan::SPACE => self.on_space(now, &ctx, verdict.epoch, activity),
             scan::BACKSPACE => self.engine.on_backspace(now),
             s if scan::is_typing_key(s) => {
                 let key = Key { scan: s, shift: self.mods.shift, caps: self.mods.caps };
@@ -199,7 +201,7 @@ impl App {
     }
 
     /// Asks the OS to switch layouts, after a short delay so the injected text is consumed first.
-    fn switch_layout(&mut self, hkl: u64, now: u64, ctx: &FocusCtx, epoch: u64) {
+    fn switch_layout(&mut self, hkl: u64, now: u64, ctx: &FocusCtx, epoch: u64, activity: u64) {
         if self.cfg.switch_delay_ms > 0 {
             std::thread::sleep(Duration::from_millis(self.cfg.switch_delay_ms));
         }
@@ -208,7 +210,7 @@ impl App {
         while let Ok(ev) = self.rx.try_recv() {
             self.pending.push_back(ev);
         }
-        if self.pending.iter().any(RawEvent::is_press) || !self.still_safe(ctx, epoch) {
+        if self.pending.iter().any(RawEvent::is_press) || !self.safe_for_activity(ctx, epoch, activity) {
             self.engine.on_break();
             self.expected = None;
             return;
@@ -238,7 +240,22 @@ impl App {
             && !self.cfg.blacklist.contains(&current.process)
     }
 
-    fn on_space(&mut self, now: u64, ctx: &FocusCtx, epoch: u64) {
+    /// A UIA focus verdict alone cannot detect a new physical key pressed inside
+    /// the same control. Check the physical-input generation on both sides of
+    /// the Win32/UIA focus check to reject an intervening press.
+    fn safe_for_activity(&mut self, ctx: &FocusCtx, epoch: u64, activity: u64) -> bool {
+        hook::activity_is_current(activity)
+            && self.still_safe(ctx, epoch)
+            && hook::activity_is_current(activity)
+    }
+
+    fn on_space(&mut self, now: u64, ctx: &FocusCtx, epoch: u64, activity: u64) {
+        // Multi-call paced rewriting may erase text before it can be restored.
+        // Do not attempt automatic corrections in apps configured for Paced mode.
+        if self.mode_for(&ctx.process) == Mode::Paced {
+            self.engine.on_break();
+            return;
+        }
         let Some(c) = self.engine.on_space(now) else { return };
 
         // If anything else was pressed since the Space, the text in the application is no
@@ -246,21 +263,21 @@ impl App {
         while let Ok(ev) = self.rx.try_recv() {
             self.pending.push_back(ev);
         }
-        if self.pending.iter().any(RawEvent::is_press) || !self.still_safe(ctx, epoch) {
+        if self.pending.iter().any(RawEvent::is_press) || !self.safe_for_activity(ctx, epoch, activity) {
             self.engine.on_break();
             return;
         }
         let mode = self.mode_for(&ctx.process);
-        if inject::send_replacement_checked(c.backspaces, &c.text, mode, || self.still_safe(ctx, epoch)).is_err() {
+        if inject::send_replacement_checked(c.backspaces, &c.text, mode, || self.safe_for_activity(ctx, epoch, activity)).is_err() {
             self.engine.on_break();
             return;
         }
-        if !self.still_safe(ctx, epoch) {
+        if !self.safe_for_activity(ctx, epoch, activity) {
             self.engine.on_break();
             return;
         }
         self.engine.commit(&c, now);
-        self.switch_layout(c.target_layout, now, ctx, epoch);
+        self.switch_layout(c.target_layout, now, ctx, epoch, activity);
         let msg = format!("تم التصحيح  ·  للتراجع: {}", self.cfg.undo_hotkey.display());
         self.toast(&msg);
     }
@@ -274,24 +291,29 @@ impl App {
         }
     }
 
-    fn do_undo(&mut self, now: u64, ctx: &FocusCtx, epoch: u64) {
+    fn do_undo(&mut self, now: u64, ctx: &FocusCtx, epoch: u64, activity: u64) {
+        // Never consume an Undo plan for an unsupported multi-call injection mode.
+        if self.mode_for(&ctx.process) == Mode::Paced {
+            self.engine.on_break();
+            return;
+        }
         inject::wait_modifiers_released(500);
         // Waiting for modifiers can outlive the focus which triggered Undo.
-        if !self.still_safe(ctx, epoch) {
+        if !self.safe_for_activity(ctx, epoch, activity) {
             self.engine.on_break();
             return;
         }
         let Some(plan) = self.engine.undo(now) else { return };
         let mode = self.mode_for(&ctx.process);
-        if inject::send_replacement_checked(plan.backspaces, &plan.text, mode, || self.still_safe(ctx, epoch)).is_err() {
+        if inject::send_replacement_checked(plan.backspaces, &plan.text, mode, || self.safe_for_activity(ctx, epoch, activity)).is_err() {
             self.engine.on_break();
             return;
         }
-        if !self.still_safe(ctx, epoch) {
+        if !self.safe_for_activity(ctx, epoch, activity) {
             self.engine.on_break();
             return;
         }
-        self.switch_layout(plan.restore_layout, now, ctx, epoch);
+        self.switch_layout(plan.restore_layout, now, ctx, epoch, activity);
         let msg = self.pause_description();
         self.toast(&msg);
     }
