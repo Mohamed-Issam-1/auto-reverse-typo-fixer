@@ -107,3 +107,80 @@ mod tests {
         assert_eq!(classify(None, None), FocusSafety::Unknown);
     }
 }
+
+/// Minimal identity-bound reading used only by the read-only focus watcher.
+/// A missing PID or failed UIA query never becomes NonPassword.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FocusSample {
+    pub pid: i32,
+    pub safety: FocusSafety,
+}
+
+pub fn sample_from_query(result: Result<(i32, FocusSafety), String>) -> FocusSample {
+    match result {
+        Ok((pid, safety)) if pid > 0 => FocusSample { pid, safety },
+        _ => FocusSample { pid: 0, safety: FocusSafety::Unknown },
+    }
+}
+
+/// For development only: poll UIA from a dedicated MTA thread and print transitions.
+/// Polling can miss quick transitions and is NOT a production authorization signal.
+/// No keyboard hook, injected input, control name or text access is used.
+pub fn run_watch_diagnostic() -> i32 {
+    println!("UIA focus watch: 20 seconds. Switch among a normal field, password field, and desktop.");
+    println!("This is read-only; process ID and classification are the only reported values.");
+
+    let worker = std::thread::spawn(|| {
+        let until = std::time::Instant::now() + Duration::from_secs(20);
+        let mut previous: Option<FocusSample> = None;
+        let mut transitions = 0usize;
+
+        while std::time::Instant::now() < until {
+            #[cfg(windows)]
+            let current = sample_from_query(query_focused());
+            #[cfg(not(windows))]
+            let current = sample_from_query(Err("Windows required".to_owned()));
+
+            if previous != Some(current) {
+                println!("focus: pid={} classification={:?}", current.pid, current.safety);
+                previous = Some(current);
+                transitions += 1;
+            }
+            std::thread::sleep(Duration::from_millis(150));
+        }
+        transitions
+    });
+
+    match worker.join() {
+        Ok(transitions) => {
+            println!("Focus watch finished: {transitions} observed state transitions.");
+            println!("No input text was read. Browsers remain blocked in normal correction mode.");
+            0
+        }
+        Err(_) => {
+            eprintln!("Focus-watch worker failed");
+            1
+        }
+    }
+}
+
+#[cfg(test)]
+mod focus_watch_tests {
+    use super::*;
+
+    #[test]
+    fn missing_process_and_failed_queries_are_unknown() {
+        assert_eq!(sample_from_query(Err("COM failure".into())), FocusSample {
+            pid: 0, safety: FocusSafety::Unknown
+        });
+        assert_eq!(sample_from_query(Ok((0, FocusSafety::NonPassword))), FocusSample {
+            pid: 0, safety: FocusSafety::Unknown
+        });
+    }
+
+    #[test]
+    fn valid_process_preserves_safe_and_sensitive_classifications() {
+        assert_eq!(sample_from_query(Ok((42, FocusSafety::Password))).safety, FocusSafety::Password);
+        assert_eq!(sample_from_query(Ok((42, FocusSafety::NonPassword))).safety, FocusSafety::NonPassword);
+    }
+}
