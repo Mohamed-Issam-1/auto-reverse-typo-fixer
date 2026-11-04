@@ -2,15 +2,16 @@
 
 Offline, open-source Windows utility that detects text typed with the wrong keyboard layout
 (Arabic <-> English) and fixes it automatically, then switches the input language.
-See `keyboard_reverse_typo_fixer.md` (PRD v2.0) for the full specification.
+**Status: working prototype (v0.1.0), not release-ready.** See `docs/PRD.md` for the specification and
+`docs/STATUS_REPORT.ar.md` (Arabic) for the detailed status, test results and known problems.
 
 ## Layout
 
 | Crate | Role | Status |
 |---|---|---|
-| `arf-core` | Platform-independent engine: key buffer, converter, validator (dictionary + affixes + n-grams), decision/run logic, undo, config | Implemented, 37 unit tests passing |
-| `arf-dictc` | Compiles word lists into FST dictionaries | Implemented |
-| `arf-win` | Windows layer: low-level hooks, `ToUnicodeEx` layouts, `SendInput`, layout switching, focus/password checks | Written and type-checked, **not yet run on Windows** |
+| `arf-core` | Platform-independent engine: key buffer, converter, validator (dictionary + affixes + n-grams), decision/run logic, undo, config | Implemented, 45 unit tests passing |
+| `arf-dictc` | Compiles word lists into FST dictionaries and evaluates false positives / recall | Implemented |
+| `arf-win` | Windows layer: low-level hooks, `ToUnicodeEx` layouts, `SendInput`, layout switching, focus/password checks | Runs on Windows (core flows verified manually); several features still unverified, see the status report |
 
 ## Build and run (Windows)
 
@@ -42,3 +43,7 @@ Tests (any OS): `cargo test -p arf-core`
 5. Undo hotkey is not swallowed by the hook (Ctrl+Alt+Z also reaches the app).
 6. Keys typed during an injection abort the correction (safe) instead of hold-and-replay.
 7. Elevation (scheduled task / uiAccess), code signing, installer.
+
+## License
+
+Source code: MIT (`LICENSE`). Dictionary data in `data/`: CC-BY-SA-4.0 (`data/LICENSE-DATA.md`).

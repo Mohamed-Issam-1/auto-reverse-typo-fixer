@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  core:
+    name: Engine tests (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p arf-core -p arf-dictc
+      - run: cargo check -p arf-win
+
+  windows:
+    name: Windows build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p arf-core
+      - run: cargo build --release -p arf-win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arf-win-windows-x64
+          path: |
+            target/release/arf-win.exe
+            data/
+            config.example.toml
