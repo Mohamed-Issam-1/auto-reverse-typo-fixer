@@ -295,6 +295,46 @@ fn undo_restores_original_text_and_layout() {
 }
 
 #[test]
+fn failed_external_undo_does_not_consume_engine_entry() {
+    let (mut e, mut t) = (engine(), Typist::new());
+    let correction = t.word(&mut e, EN, "hgsghl").expect("correction");
+    e.commit(&correction, t.now);
+    let preview = e.prepare_undo(t.now + 100).expect("prepare Undo");
+    // Simulate an external injection failure: no commit_undo call takes place.
+    assert!(e.can_undo(t.now + 150));
+    assert!(!e.is_paused(t.now + 150));
+    assert_eq!(e.prepare_undo(t.now + 150), Some(preview.clone()));
+    // Success commits the exact plan and applies the Undo pause/rejection.
+    assert!(e.commit_undo(&preview, t.now + 150));
+    assert!(!e.can_undo(t.now + 150));
+    assert!(e.is_paused(t.now + 150));
+    assert!(e.prepare_undo(t.now + 150).is_none());
+}
+
+#[test]
+fn invalid_undo_plan_cannot_change_engine_state() {
+    let (mut e, mut t) = (engine(), Typist::new());
+    let correction = t.word(&mut e, EN, "hgsghl").expect("correction");
+    e.commit(&correction, t.now);
+    let mut plan = e.prepare_undo(t.now + 100).expect("prepare Undo");
+    plan.backspaces += 1;
+    assert!(!e.commit_undo(&plan, t.now + 100));
+    assert!(e.can_undo(t.now + 100));
+    assert!(!e.is_paused(t.now + 100));
+}
+
+#[test]
+fn expired_undo_cannot_be_prepared_or_committed() {
+    let (mut e, mut t) = (engine(), Typist::new());
+    let correction = t.word(&mut e, EN, "hgsghl").expect("correction");
+    e.commit(&correction, t.now);
+    let plan = e.prepare_undo(t.now + 100).expect("prepare Undo");
+    assert!(e.prepare_undo(t.now + 10_000).is_none());
+    assert!(!e.commit_undo(&plan, t.now + 10_000));
+    assert!(!e.is_paused(t.now + 10_000));
+}
+
+#[test]
 fn undo_expires_and_is_cleared_by_next_key() {
     let (mut e, mut t) = (engine(), Typist::new());
     let c = t.word(&mut e, EN, "hgsghl").unwrap();

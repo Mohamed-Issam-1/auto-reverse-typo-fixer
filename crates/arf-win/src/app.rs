@@ -303,13 +303,20 @@ impl App {
             self.engine.on_break();
             return;
         }
-        let Some(plan) = self.engine.undo(now) else { return };
+        // Preview without mutating engine state; only commit after a complete rewrite.
+        let Some(plan) = self.engine.prepare_undo(now) else { return };
         let mode = self.mode_for(&ctx.process);
         if inject::send_replacement_checked(plan.backspaces, &plan.text, mode, || self.safe_for_activity(ctx, epoch, activity)).is_err() {
             self.engine.on_break();
             return;
         }
+        // Revalidate after SendInput before committing rejection/pause state.
+        // If focus or physical input changed, leave Undo uncommitted.
         if !self.safe_for_activity(ctx, epoch, activity) {
+            self.engine.on_break();
+            return;
+        }
+        if !self.engine.commit_undo(&plan, now) {
             self.engine.on_break();
             return;
         }

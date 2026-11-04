@@ -256,12 +256,33 @@ impl Engine {
         self.last.as_ref().is_some_and(|e| now_ms.saturating_sub(e.at_ms) <= self.cfg.undo_window_ms)
     }
 
-    /// Reverts the last correction (the whole run rewrite). Words become `Rejected`.
-    pub fn undo(&mut self, now_ms: u64) -> Option<UndoPlan> {
-        let e = self.last.take()?;
+    /// Build an Undo plan without consuming it or changing rejection/pause state.
+    /// If the OS rewrite fails, the caller must NOT commit this plan.
+    pub fn prepare_undo(&self, now_ms: u64) -> Option<UndoPlan> {
+        let e = self.last.as_ref()?;
         if now_ms.saturating_sub(e.at_ms) > self.cfg.undo_window_ms {
             return None;
         }
+        Some(UndoPlan {
+            backspaces: e.corrected_chars,
+            text: e.original_text.clone(),
+            restore_layout: e.restore_layout,
+        })
+    }
+
+    /// Finalize a previously prepared Undo after its external rewrite succeeded.
+    /// This engine is owned by one worker; no other engine operation can interleave
+    /// with its synchronous SendInput call. Verify the plan still matches anyway.
+    pub fn commit_undo(&mut self, plan: &UndoPlan, now_ms: u64) -> bool {
+        let Some(candidate) = self.last.as_ref() else { return false };
+        if now_ms.saturating_sub(candidate.at_ms) > self.cfg.undo_window_ms
+            || candidate.corrected_chars != plan.backspaces
+            || candidate.original_text != plan.text
+            || candidate.restore_layout != plan.restore_layout
+        {
+            return false;
+        }
+        let e = self.last.take().expect("matching Undo entry was checked");
         // Remember what the user rejected: these words are protected for the rest of the session.
         let rejected: Vec<(Lang, String)> = (e.first..=e.last)
             .filter_map(|i| {
@@ -283,7 +304,14 @@ impl Engine {
             UndoPause::Words(n) => Some(Pause::Words(n)),
             UndoPause::Seconds(s) => Some(Pause::Until(now_ms + s as u64 * 1000)),
         };
-        Some(UndoPlan { backspaces: e.corrected_chars, text: e.original_text, restore_layout: e.restore_layout })
+        true
+    }
+
+    /// Convenience API for callers that do not have an external editor rewrite.
+    /// The Windows worker uses prepare_undo + commit_undo instead.
+    pub fn undo(&mut self, now_ms: u64) -> Option<UndoPlan> {
+        let plan = self.prepare_undo(now_ms)?;
+        self.commit_undo(&plan, now_ms).then_some(plan)
     }
 
     /// The OS did not honor the layout switch: apply relaxed thresholds to the next few words.
