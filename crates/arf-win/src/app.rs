@@ -199,12 +199,26 @@ impl App {
     }
 
     /// Asks the OS to switch layouts, after a short delay so the injected text is consumed first.
-    fn switch_layout(&mut self, hkl: u64, now: u64) {
+    fn switch_layout(&mut self, hkl: u64, now: u64, ctx: &FocusCtx, epoch: u64) {
         if self.cfg.switch_delay_ms > 0 {
             std::thread::sleep(Duration::from_millis(self.cfg.switch_delay_ms));
         }
-        inject::request_layout(hkl as isize);
-        self.expected = Some((hkl as isize, now));
+        // Another real key or mouse click after the injection invalidates the
+        // original context. Preserve those events for normal processing.
+        while let Ok(ev) = self.rx.try_recv() {
+            self.pending.push_back(ev);
+        }
+        if self.pending.iter().any(RawEvent::is_press) || !self.still_safe(ctx, epoch) {
+            self.engine.on_break();
+            self.expected = None;
+            return;
+        }
+        if inject::request_layout_if_foreground(ctx.hwnd, hkl as isize) {
+            self.expected = Some((hkl as isize, now));
+        } else {
+            self.engine.on_break();
+            self.expected = None;
+        }
     }
 
     /// Recheck context and event generation immediately before changing text.
@@ -237,11 +251,16 @@ impl App {
             return;
         }
         let mode = self.mode_for(&ctx.process);
-        if inject::send_replacement(c.backspaces, &c.text, mode).is_err() {
+        if inject::send_replacement_checked(c.backspaces, &c.text, mode, || self.still_safe(ctx, epoch)).is_err() {
+            self.engine.on_break();
+            return;
+        }
+        if !self.still_safe(ctx, epoch) {
+            self.engine.on_break();
             return;
         }
         self.engine.commit(&c, now);
-        self.switch_layout(c.target_layout, now);
+        self.switch_layout(c.target_layout, now, ctx, epoch);
         let msg = format!("تم التصحيح  ·  للتراجع: {}", self.cfg.undo_hotkey.display());
         self.toast(&msg);
     }
@@ -263,11 +282,16 @@ impl App {
             return;
         }
         let Some(plan) = self.engine.undo(now) else { return };
-        if inject::send_replacement(plan.backspaces, &plan.text, self.mode_for(&ctx.process)).is_err() {
+        let mode = self.mode_for(&ctx.process);
+        if inject::send_replacement_checked(plan.backspaces, &plan.text, mode, || self.still_safe(ctx, epoch)).is_err() {
             self.engine.on_break();
             return;
         }
-        self.switch_layout(plan.restore_layout, now);
+        if !self.still_safe(ctx, epoch) {
+            self.engine.on_break();
+            return;
+        }
+        self.switch_layout(plan.restore_layout, now, ctx, epoch);
         let msg = self.pause_description();
         self.toast(&msg);
     }

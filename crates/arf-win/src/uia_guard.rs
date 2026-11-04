@@ -116,12 +116,10 @@ fn read_win_focus() -> Option<WinFocus> {
         if tid == 0 || pid == 0 { return None; }
         let mut info: GUITHREADINFO = std::mem::zeroed();
         info.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
-        let focus = if GetGUIThreadInfo(tid, &mut info) != 0 && info.hwndFocus != 0 {
-            info.hwndFocus
-        } else {
-            hwnd
-        };
-        Some(WinFocus { hwnd, focus, pid })
+        if GetGUIThreadInfo(tid, &mut info) == 0 || info.hwndFocus == 0 {
+            return None; // The active edit control is unknown; fail closed.
+        }
+        Some(WinFocus { hwnd, focus: info.hwndFocus, pid })
     }
 }
 
@@ -154,7 +152,7 @@ fn run_monitor(
     }
     .map_err(|e| format!("UI Automation creation failed: {e}"))?;
 
-    let (sender, receiver) = mpsc::channel();
+    let (sender, receiver) = mpsc::sync_channel(1);
     // The COM callback increments epoch BEFORE queuing an event, immediately
     // invalidating any previous NonPassword classification.
     let handler = crate::uia_events::make_guard_handler(sender, Arc::clone(&epoch));
@@ -219,6 +217,32 @@ pub fn run_guard_watch() -> i32 {
     0
 }
 
+/// Read-only microbenchmark for the cached gate. Does not start UIA, hooks or injection.
+/// This measures lookup cost, NOT full end-to-end typing latency.
+#[cfg(windows)]
+pub fn run_guard_bench() -> i32 {
+    let guard = UiaGuard::empty();
+    let focus = WinFocus { hwnd: 100, focus: 101, pid: 42 };
+    *guard.latest.lock().unwrap() = Some(Cached {
+        sample: FocusSample { pid: 42, safety: FocusSafety::NonPassword },
+        win: focus,
+        epoch: 0,
+        checked_at: Instant::now(),
+    });
+    const N: u32 = 10_000;
+    let started = Instant::now();
+    let mut allowed = 0u32;
+    for _ in 0..N {
+        if guard.verdict(focus).allows_text() { allowed += 1; }
+    }
+    let elapsed = started.elapsed();
+    guard.epoch.fetch_add(1, Ordering::AcqRel);
+    let denied = (0..N).filter(|_| !guard.verdict(focus).allows_text()).count();
+    println!("Cached gate: {N} checks in {:?}; allowed={allowed}", elapsed);
+    println!("After invalidation: {denied}/{N} checks denied");
+    println!("No input content, Win32 hooks, UIA services, or injection were accessed.");
+    if denied != N as usize { 1 } else { 0 }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,6 +260,25 @@ mod tests {
         });
     }
 
+    #[test]
+    fn new_epoch_requires_new_matching_sample() {
+        let guard = UiaGuard::empty();
+        record(&guard, FocusSafety::NonPassword, Duration::ZERO);
+        assert!(guard.verdict(context()).allows_text());
+        guard.epoch.fetch_add(1, Ordering::AcqRel);
+        assert!(!guard.verdict(context()).allows_text());
+        record(&guard, FocusSafety::NonPassword, Duration::ZERO);
+        assert!(guard.verdict(context()).allows_text());
+    }
+
+    #[test]
+    fn unknown_process_or_missing_focus_never_authorizes() {
+        let guard = UiaGuard::empty();
+        record(&guard, FocusSafety::NonPassword, Duration::ZERO);
+        assert!(!guard.verdict(WinFocus { pid: 0, ..context() }).allows_text());
+        assert!(!guard.verdict(WinFocus { focus: 0, ..context() }).allows_text());
+        assert!(!guard.verdict(WinFocus { hwnd: 0, ..context() }).allows_text());
+    }
     #[test]
     fn fails_closed_until_matching_fresh_non_password_sample() {
         let guard = UiaGuard::empty();

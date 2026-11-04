@@ -3,7 +3,7 @@
 //! This is NOT yet an authorization source for real-time correction.
 
 use crate::uia::{self, FocusSample};
-use std::sync::mpsc::{self, Sender, RecvTimeoutError};
+use std::sync::mpsc::{self, SyncSender, RecvTimeoutError};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -18,7 +18,7 @@ use windows::Win32::UI::Accessibility::{
 
 #[implement(IUIAutomationFocusChangedEventHandler)]
 struct FocusEventRelay {
-    sender: Sender<()>,
+    sender: SyncSender<()>,
     epoch: Option<Arc<AtomicU64>>,
 }
 
@@ -29,14 +29,15 @@ impl IUIAutomationFocusChangedEventHandler_Impl for FocusEventRelay_Impl {
         if let Some(epoch) = &self.epoch {
             epoch.fetch_add(1, Ordering::AcqRel);
         }
+        // Coalesce notifications without blocking a COM callback. Epoch still advances for each event.
         // Never read text or make COM requests inside an OS callback.
-        let _ = self.sender.send(());
+        let _ = self.sender.try_send(());
         Ok(())
     }
 }
 
 pub(crate) fn make_guard_handler(
-    sender: Sender<()>,
+    sender: SyncSender<()>,
     epoch: Arc<AtomicU64>,
 ) -> IUIAutomationFocusChangedEventHandler {
     FocusEventRelay { sender, epoch: Some(epoch) }.into()
@@ -56,7 +57,7 @@ fn run_on_mta() -> Result<(), String> {
         CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
     }.map_err(|e| format!("Cannot start UI Automation: {e}"))?;
 
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(1);
     let handler: IUIAutomationFocusChangedEventHandler = FocusEventRelay { sender: tx, epoch: None }.into();
     unsafe { automation.AddFocusChangedEventHandler(None, &handler) }
         .map_err(|e| format!("Register focus handler failed: {e}"))?;
@@ -94,12 +95,24 @@ fn run_on_mta() -> Result<(), String> {
     }
 
     let remove = unsafe { automation.RemoveFocusChangedEventHandler(&handler) };
-    println!("UIA event watch finished: {signals} focus notifications, {transitions} observed classification changes.");
+    println!("UIA event watch finished: {signals} processed signals (coalesced), {transitions} observed classification changes.");
     println!("No text was read. Do NOT use these observations to authorize browser correction.");
     remove.map_err(|e| format!("Could not unregister focus handler: {e}"))?;
     Ok(())
 }
 
+#[cfg(test)]
+mod queue_tests {
+    use std::sync::mpsc::{sync_channel, TrySendError};
+
+    #[test]
+    fn focus_signals_coalesce_without_blocking() {
+        let (tx, rx) = sync_channel(1);
+        assert!(tx.try_send(()).is_ok());
+        assert!(matches!(tx.try_send(()), Err(TrySendError::Full(()))));
+        assert!(rx.try_recv().is_ok());
+    }
+}
 pub fn run_event_watch() -> i32 {
     match std::thread::spawn(run_on_mta).join() {
         Ok(Ok(())) => 0,

@@ -50,18 +50,33 @@ fn char_inputs(unit: u16) -> [INPUT; 2] {
 /// Deletes `backspaces` characters and types `text`. Output uses `KEYEVENTF_UNICODE`, so it does
 /// not depend on the layout that is active at that moment.
 pub fn send_replacement(backspaces: usize, text: &str, mode: Mode) -> Result<(), String> {
+    send_replacement_checked(backspaces, text, mode, || true)
+}
+
+/// Additional caller-supplied focus gate for each SendInput call.
+/// This is best-effort; focus may still change after a check, and paced
+/// injection can be partially applied if authorization disappears.
+pub fn send_replacement_checked(
+    backspaces: usize,
+    text: &str,
+    mode: Mode,
+    mut target_valid: impl FnMut() -> bool,
+) -> Result<(), String> {
     match mode {
         Mode::Batch => {
             let mut inputs = backspaces_inputs(backspaces);
             for unit in text.encode_utf16() {
                 inputs.extend(char_inputs(unit));
             }
+            if !target_valid() { return Err("Focus safety changed during injection".to_owned()); }
             send(&inputs)
         }
         Mode::Paced => {
+            if !target_valid() { return Err("Focus safety changed during injection".to_owned()); }
             send(&backspaces_inputs(backspaces))?;
             std::thread::sleep(std::time::Duration::from_millis(8));
             for unit in text.encode_utf16() {
+                if !target_valid() { return Err("Focus safety changed during injection".to_owned()); }
                 send(&char_inputs(unit))?;
                 std::thread::sleep(std::time::Duration::from_millis(3));
             }
@@ -81,6 +96,15 @@ pub fn send_enter() -> Result<(), String> {
 
 /// Asks the foreground application to switch its input language.
 /// (`ActivateKeyboardLayout` would only affect this process's own thread.)
+/// Do not post a layout change to another foreground window after a correction delay.
+/// This narrows, but cannot eliminate, the focus-change race at the Win32 boundary.
+pub fn request_layout_if_foreground(expected_hwnd: HWND, hkl: HKL) -> bool {
+    unsafe {
+        expected_hwnd != 0
+            && GetForegroundWindow() == expected_hwnd
+            && PostMessageW(expected_hwnd, WM_INPUTLANGCHANGEREQUEST, 0, hkl) != 0
+    }
+}
 pub fn request_layout(hkl: HKL) {
     unsafe {
         let hwnd = GetForegroundWindow();
@@ -103,6 +127,17 @@ pub fn wait_modifiers_released(timeout_ms: u64) {
     }
 }
 
+#[cfg(test)]
+mod safety_tests {
+    use super::*;
+
+    #[test]
+    fn unsafe_target_blocks_both_injection_modes_before_any_send() {
+        for mode in [Mode::Batch, Mode::Paced] {
+            assert!(send_replacement_checked(3, "abc", mode, || false).is_err());
+        }
+    }
+}
 pub fn caps_lock_on() -> bool {
     unsafe { GetKeyState(VK_CAPITAL) & 1 != 0 }
 }
