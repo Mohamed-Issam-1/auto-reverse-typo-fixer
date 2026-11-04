@@ -6,6 +6,7 @@ use crate::inject::{self, Mode};
 use crate::overlay::Overlay;
 use crate::layout_win;
 use crate::sys::HWND;
+use crate::uia_guard::{UiaGuard, WinFocus};
 use arf_core::config::AppConfig;
 use arf_core::types::scan;
 use arf_core::{Engine, Key, UndoPause};
@@ -48,6 +49,8 @@ pub struct App {
     pending: VecDeque<RawEvent>,
     mods: Mods,
     focus: FocusMonitor,
+    uia: UiaGuard,
+    last_uia_epoch: Option<u64>,
     last_focus: (HWND, HWND),
     /// Layout we asked the OS to switch to, and when. Verified on a later key press.
     expected: Option<(isize, u64)>,
@@ -65,6 +68,8 @@ impl App {
             pending: VecDeque::new(),
             mods,
             focus: FocusMonitor::new(),
+            uia: UiaGuard::start(),
+            last_uia_epoch: None,
             last_focus: (0, 0),
             expected: None,
             overlay,
@@ -122,7 +127,15 @@ impl App {
             self.last_focus = (ctx.hwnd, ctx.focus);
             self.engine.on_break();
         }
+        let verdict = self.uia.verdict(WinFocus { hwnd: ctx.hwnd, focus: ctx.focus, pid: ctx.pid });
+        // A focus event must break the buffered run even when the top-level
+        // window and the Win32 focus HWND remain unchanged.
+        if self.last_uia_epoch != Some(verdict.epoch) {
+            self.last_uia_epoch = Some(verdict.epoch);
+            self.engine.on_break();
+        }
         if !self.cfg.enabled
+            || !verdict.allows_text()
             || ctx.is_password
             || is_sensitive_host(&ctx.process)
             || self.cfg.blacklist.contains(&ctx.process)
@@ -132,7 +145,7 @@ impl App {
         }
 
         if self.undo_hotkey_matches(vk) && self.engine.can_undo(now) {
-            self.do_undo(now);
+            self.do_undo(now, &ctx, verdict.epoch);
             return;
         }
         if self.mods.ctrl || self.mods.alt || self.mods.win {
@@ -147,7 +160,7 @@ impl App {
             return;
         }
         match sc {
-            scan::SPACE => self.on_space(now, &ctx.process),
+            scan::SPACE => self.on_space(now, &ctx, verdict.epoch),
             scan::BACKSPACE => self.engine.on_backspace(now),
             s if scan::is_typing_key(s) => {
                 let key = Key { scan: s, shift: self.mods.shift, caps: self.mods.caps };
@@ -194,7 +207,24 @@ impl App {
         self.expected = Some((hkl as isize, now));
     }
 
-    fn on_space(&mut self, now: u64, process: &str) {
+    /// Recheck context and event generation immediately before changing text.
+    /// This does not make missed UIA events impossible; browser denylist remains.
+    fn still_safe(&mut self, original: &FocusCtx, epoch: u64) -> bool {
+        let Some(current) = self.focus.current() else { return false };
+        let verdict = self.uia.verdict(WinFocus { hwnd: current.hwnd, focus: current.focus, pid: current.pid });
+        self.cfg.enabled
+            && verdict.allows_text()
+            && verdict.epoch == epoch
+            && current.pid == original.pid
+            && current.hwnd == original.hwnd
+            && current.focus == original.focus
+            && current.hkl == original.hkl
+            && !current.is_password
+            && !is_sensitive_host(&current.process)
+            && !self.cfg.blacklist.contains(&current.process)
+    }
+
+    fn on_space(&mut self, now: u64, ctx: &FocusCtx, epoch: u64) {
         let Some(c) = self.engine.on_space(now) else { return };
 
         // If anything else was pressed since the Space, the text in the application is no
@@ -202,10 +232,11 @@ impl App {
         while let Ok(ev) = self.rx.try_recv() {
             self.pending.push_back(ev);
         }
-        if self.pending.iter().any(RawEvent::is_press) {
+        if self.pending.iter().any(RawEvent::is_press) || !self.still_safe(ctx, epoch) {
+            self.engine.on_break();
             return;
         }
-        let mode = self.mode_for(process);
+        let mode = self.mode_for(&ctx.process);
         if inject::send_replacement(c.backspaces, &c.text, mode).is_err() {
             return;
         }
@@ -224,11 +255,16 @@ impl App {
         }
     }
 
-    fn do_undo(&mut self, now: u64) {
-        let process = self.focus.current().map(|c| c.process).unwrap_or_default();
-        let Some(plan) = self.engine.undo(now) else { return };
+    fn do_undo(&mut self, now: u64, ctx: &FocusCtx, epoch: u64) {
         inject::wait_modifiers_released(500);
-        if inject::send_replacement(plan.backspaces, &plan.text, self.mode_for(&process)).is_err() {
+        // Waiting for modifiers can outlive the focus which triggered Undo.
+        if !self.still_safe(ctx, epoch) {
+            self.engine.on_break();
+            return;
+        }
+        let Some(plan) = self.engine.undo(now) else { return };
+        if inject::send_replacement(plan.backspaces, &plan.text, self.mode_for(&ctx.process)).is_err() {
+            self.engine.on_break();
             return;
         }
         self.switch_layout(plan.restore_layout, now);

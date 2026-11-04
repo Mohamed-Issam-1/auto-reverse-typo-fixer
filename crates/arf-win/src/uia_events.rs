@@ -4,6 +4,8 @@
 
 use crate::uia::{self, FocusSample};
 use std::sync::mpsc::{self, Sender, RecvTimeoutError};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use windows::core::{implement, Ref, Result as WinResult};
 use windows::Win32::System::Com::{
@@ -17,15 +19,27 @@ use windows::Win32::UI::Accessibility::{
 #[implement(IUIAutomationFocusChangedEventHandler)]
 struct FocusEventRelay {
     sender: Sender<()>,
+    epoch: Option<Arc<AtomicU64>>,
 }
 
 #[allow(non_snake_case)]
 impl IUIAutomationFocusChangedEventHandler_Impl for FocusEventRelay_Impl {
     fn HandleFocusChangedEvent(&self, _sender: Ref<'_, IUIAutomationElement>) -> WinResult<()> {
+        // Invalidate stale safety state before the worker can process the event.
+        if let Some(epoch) = &self.epoch {
+            epoch.fetch_add(1, Ordering::AcqRel);
+        }
         // Never read text or make COM requests inside an OS callback.
         let _ = self.sender.send(());
         Ok(())
     }
+}
+
+pub(crate) fn make_guard_handler(
+    sender: Sender<()>,
+    epoch: Arc<AtomicU64>,
+) -> IUIAutomationFocusChangedEventHandler {
+    FocusEventRelay { sender, epoch: Some(epoch) }.into()
 }
 
 fn run_on_mta() -> Result<(), String> {
@@ -43,7 +57,7 @@ fn run_on_mta() -> Result<(), String> {
     }.map_err(|e| format!("Cannot start UI Automation: {e}"))?;
 
     let (tx, rx) = mpsc::channel();
-    let handler: IUIAutomationFocusChangedEventHandler = FocusEventRelay { sender: tx }.into();
+    let handler: IUIAutomationFocusChangedEventHandler = FocusEventRelay { sender: tx, epoch: None }.into();
     unsafe { automation.AddFocusChangedEventHandler(None, &handler) }
         .map_err(|e| format!("Register focus handler failed: {e}"))?;
 

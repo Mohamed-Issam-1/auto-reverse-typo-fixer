@@ -14,5 +14,6 @@ pub mod overlay;
 pub mod sys;
 pub mod cli;
 pub mod uia;
+pub mod uia_guard;
 #[cfg(windows)]
 pub mod uia_events;
