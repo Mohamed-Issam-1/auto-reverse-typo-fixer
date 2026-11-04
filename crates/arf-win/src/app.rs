@@ -1,6 +1,6 @@
 //! Worker thread: turns raw hook events into engine calls and applies corrections.
 
-use crate::focus::{FocusCtx, FocusMonitor};
+use crate::focus::{is_sensitive_host, FocusCtx, FocusMonitor};
 use crate::hook::RawEvent;
 use crate::inject::{self, Mode};
 use crate::overlay::Overlay;
@@ -112,15 +112,8 @@ impl App {
         }
         let now = self.now();
 
-        if self.undo_hotkey_matches(vk) && self.engine.can_undo(now) {
-            self.do_undo(now);
-            return;
-        }
-        if self.mods.ctrl || self.mods.alt || self.mods.win {
-            self.engine.on_break(); // shortcuts: caret/text may change in ways we cannot track
-            return;
-        }
-
+        // Check context before Undo: never rewrite content in a different window,
+        // a password field, or a browser whose focus safety is not yet verified.
         let Some(ctx) = self.focus.current() else {
             self.engine.on_break();
             return;
@@ -129,8 +122,21 @@ impl App {
             self.last_focus = (ctx.hwnd, ctx.focus);
             self.engine.on_break();
         }
-        if !self.cfg.enabled || ctx.is_password || self.cfg.blacklist.contains(&ctx.process) {
+        if !self.cfg.enabled
+            || ctx.is_password
+            || is_sensitive_host(&ctx.process)
+            || self.cfg.blacklist.contains(&ctx.process)
+        {
             self.engine.on_break();
+            return;
+        }
+
+        if self.undo_hotkey_matches(vk) && self.engine.can_undo(now) {
+            self.do_undo(now);
+            return;
+        }
+        if self.mods.ctrl || self.mods.alt || self.mods.win {
+            self.engine.on_break(); // shortcuts: caret/text may change in ways we cannot track
             return;
         }
         layout_win::register(self.engine.layouts_mut(), ctx.hkl);

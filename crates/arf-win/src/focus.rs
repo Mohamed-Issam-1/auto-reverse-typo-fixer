@@ -3,6 +3,18 @@
 use crate::sys::*;
 use std::collections::HashMap;
 
+/// Until UI Automation focus tracking has been integrated and validated, do not
+/// buffer or transform text typed in browsers. Unknown processes fail closed.
+/// This protection is intentionally independent of user-configurable blacklist.
+pub fn is_sensitive_host(process: &str) -> bool {
+    matches!(
+        process,
+        "" | "brave.exe" | "chrome.exe" | "msedge.exe" | "firefox.exe"
+            | "chromium.exe" | "opera.exe" | "opera_gx.exe" | "vivaldi.exe"
+            | "waterfox.exe" | "librewolf.exe" | "zen.exe" | "arc.exe"
+    )
+}
+
 #[derive(Clone, Debug)]
 pub struct FocusCtx {
     pub hwnd: HWND,
@@ -87,5 +99,25 @@ impl FocusMonitor {
         }
         self.procs.insert(pid, name.clone());
         name
+    }
+}
+
+#[cfg(test)]
+mod sensitive_host_tests {
+    use super::is_sensitive_host;
+
+    #[test]
+    fn known_browsers_and_unknown_process_are_protected() {
+        for name in ["", "brave.exe", "chrome.exe", "msedge.exe", "firefox.exe",
+                     "chromium.exe", "vivaldi.exe", "opera.exe"] {
+            assert!(is_sensitive_host(name), "unprotected: {name:?}");
+        }
+    }
+
+    #[test]
+    fn normal_desktop_apps_are_not_blanket_blocked() {
+        for name in ["notepad.exe", "winword.exe", "calc.exe"] {
+            assert!(!is_sensitive_host(name), "unexpectedly blocked: {name:?}");
+        }
     }
 }
