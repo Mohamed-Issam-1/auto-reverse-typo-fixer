@@ -127,7 +127,16 @@ pub struct Engine {
 impl Engine {
     pub fn new(cfg: Config, validator: Validator, layouts: LayoutRegistry) -> Self {
         let buf = KeyBuffer::new(cfg.max_run_words, cfg.max_run_chars, cfg.idle_timeout_ms);
-        Engine { cfg, validator, layouts, buf, sticky: 0, last: None, pause: None, last_input_ms: None }
+        Engine {
+            cfg,
+            validator,
+            layouts,
+            buf,
+            sticky: 0,
+            last: None,
+            pause: None,
+            last_input_ms: None,
+        }
     }
 
     pub fn layouts(&self) -> &LayoutRegistry {
@@ -175,7 +184,9 @@ impl Engine {
 
     pub fn tick(&mut self, now_ms: u64) {
         self.buf.tick(now_ms);
-        if self.last_input_ms.is_some_and(|l| now_ms.saturating_sub(l) > self.cfg.idle_timeout_ms)
+        if self
+            .last_input_ms
+            .is_some_and(|l| now_ms.saturating_sub(l) > self.cfg.idle_timeout_ms)
             && matches!(self.pause, Some(Pause::Run))
         {
             self.pause = None;
@@ -220,7 +231,11 @@ impl Engine {
         match self.pause {
             Some(Pause::Run) => true,
             Some(Pause::Words(n)) => {
-                self.pause = if n > 1 { Some(Pause::Words(n - 1)) } else { None };
+                self.pause = if n > 1 {
+                    Some(Pause::Words(n - 1))
+                } else {
+                    None
+                };
                 n > 0
             }
             Some(Pause::Until(t)) => {
@@ -253,7 +268,9 @@ impl Engine {
     }
 
     pub fn can_undo(&self, now_ms: u64) -> bool {
-        self.last.as_ref().is_some_and(|e| now_ms.saturating_sub(e.at_ms) <= self.cfg.undo_window_ms)
+        self.last
+            .as_ref()
+            .is_some_and(|e| now_ms.saturating_sub(e.at_ms) <= self.cfg.undo_window_ms)
     }
 
     /// Build an Undo plan without consuming it or changing rejection/pause state.
@@ -274,7 +291,9 @@ impl Engine {
     /// This engine is owned by one worker; no other engine operation can interleave
     /// with its synchronous SendInput call. Verify the plan still matches anyway.
     pub fn commit_undo(&mut self, plan: &UndoPlan, now_ms: u64) -> bool {
-        let Some(candidate) = self.last.as_ref() else { return false };
+        let Some(candidate) = self.last.as_ref() else {
+            return false;
+        };
         if now_ms.saturating_sub(candidate.at_ms) > self.cfg.undo_window_ms
             || candidate.corrected_chars != plan.backspaces
             || candidate.original_text != plan.text
@@ -359,7 +378,9 @@ impl Engine {
             if skip_typed(&ptyped) {
                 break;
             }
-            let Some(pconv) = translate_keys(p.keys(), target) else { break };
+            let Some(pconv) = translate_keys(p.keys(), target) else {
+                break;
+            };
             if !self.qualifies_relaxed(typed_lang, &ptyped, &pconv) {
                 break;
             }
@@ -377,7 +398,11 @@ impl Engine {
             text.push_str(&spaces);
             original_text.push_str(&original);
             original_text.push_str(&spaces);
-            words.push(WordFix { original, corrected, spaces: wi.trailing_spaces });
+            words.push(WordFix {
+                original,
+                corrected,
+                spaces: wi.trailing_spaces,
+            });
         }
         Some(Correction {
             first,
@@ -402,7 +427,10 @@ impl Engine {
             return false; // valid as typed (or user-protected): the typed word wins
         }
         let letters = letter_count(core(conv));
-        match self.validator.judge(typed_lang.other(), conv, typed_lang, typed) {
+        match self
+            .validator
+            .judge(typed_lang.other(), conv, typed_lang, typed)
+        {
             Evidence::Extension => true,
             Evidence::TierA => letters >= self.cfg.min_len,
             Evidence::TierB(s) => match self.cfg.sensitivity {
@@ -420,7 +448,10 @@ impl Engine {
         if self.typed_is_protected(typed_lang, typed) {
             return false;
         }
-        match self.validator.judge(typed_lang.other(), conv, typed_lang, typed) {
+        match self
+            .validator
+            .judge(typed_lang.other(), conv, typed_lang, typed)
+        {
             Evidence::Extension | Evidence::TierA => true,
             Evidence::TierB(s) => s >= self.cfg.tier_b_relaxed,
             Evidence::None => false,

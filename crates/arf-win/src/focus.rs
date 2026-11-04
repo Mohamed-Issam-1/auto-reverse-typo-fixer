@@ -8,9 +8,18 @@ use crate::sys::*;
 pub fn is_sensitive_host(process: &str) -> bool {
     matches!(
         process,
-        "" | "brave.exe" | "chrome.exe" | "msedge.exe" | "firefox.exe"
-            | "chromium.exe" | "opera.exe" | "opera_gx.exe" | "vivaldi.exe"
-            | "waterfox.exe" | "librewolf.exe" | "zen.exe" | "arc.exe"
+        "" | "brave.exe"
+            | "chrome.exe"
+            | "msedge.exe"
+            | "firefox.exe"
+            | "chromium.exe"
+            | "opera.exe"
+            | "opera_gx.exe"
+            | "vivaldi.exe"
+            | "waterfox.exe"
+            | "librewolf.exe"
+            | "zen.exe"
+            | "arc.exe"
             | "msedgewebview2.exe"
     )
 }
@@ -96,7 +105,14 @@ impl FocusMonitor {
             if confirmed_tid != tid || confirmed_pid != pid {
                 return None;
             }
-            Some(FocusCtx { hwnd, focus, pid, hkl, is_password, process })
+            Some(FocusCtx {
+                hwnd,
+                focus,
+                pid,
+                hkl,
+                is_password,
+                process,
+            })
         }
     }
 
@@ -133,7 +149,9 @@ impl FocusMonitor {
             struct Handle(HANDLE);
             impl Drop for Handle {
                 fn drop(&mut self) {
-                    unsafe { CloseHandle(self.0); }
+                    unsafe {
+                        CloseHandle(self.0);
+                    }
                 }
             }
             let _handle = Handle(h);
@@ -157,8 +175,17 @@ mod sensitive_host_tests {
 
     #[test]
     fn known_browsers_and_unknown_process_are_protected() {
-        for name in ["", "brave.exe", "chrome.exe", "msedge.exe", "firefox.exe",
-                     "chromium.exe", "vivaldi.exe", "opera.exe", "msedgewebview2.exe"] {
+        for name in [
+            "",
+            "brave.exe",
+            "chrome.exe",
+            "msedge.exe",
+            "firefox.exe",
+            "chromium.exe",
+            "vivaldi.exe",
+            "opera.exe",
+            "msedgewebview2.exe",
+        ] {
             assert!(is_sensitive_host(name), "unprotected: {name:?}");
         }
     }
@@ -177,20 +204,32 @@ mod fresh_context_tests {
 
     #[test]
     fn process_names_are_normalized_from_live_paths() {
-        assert_eq!(process_basename(r"C:\Program Files\Browser\CHROME.EXE"), Some("chrome.exe".into()));
-        assert_eq!(process_basename("/opt/Apps/MsEdgeWebView2.EXE"), Some("msedgewebview2.exe".into()));
+        assert_eq!(
+            process_basename(r"C:\Program Files\Browser\CHROME.EXE"),
+            Some("chrome.exe".into())
+        );
+        assert_eq!(
+            process_basename("/opt/Apps/MsEdgeWebView2.EXE"),
+            Some("msedgewebview2.exe".into())
+        );
     }
 
     #[test]
     fn empty_or_malformed_process_names_are_rejected() {
         for path in ["", "C:\\", "/", ".", "..", "  "] {
-            assert!(process_basename(path).is_none(), "unexpected process: {path:?}");
+            assert!(
+                process_basename(path).is_none(),
+                "unexpected process: {path:?}"
+            );
         }
     }
 
     #[test]
     fn classic_edit_password_checks_fail_closed_on_missing_style() {
-        assert_eq!(win32_password_status("Edit", ES_PASSWORD | 0x4000_0000), Some(true));
+        assert_eq!(
+            win32_password_status("Edit", ES_PASSWORD | 0x4000_0000),
+            Some(true)
+        );
         assert_eq!(win32_password_status("eDiT", 0x4000_0000), Some(false));
         assert_eq!(win32_password_status("Edit", 0), None);
         assert_eq!(win32_password_status("Chrome_WidgetWin_1", 0), Some(false));

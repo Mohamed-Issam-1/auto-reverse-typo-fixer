@@ -3,8 +3,8 @@
 //! This is NOT yet an authorization source for real-time correction.
 
 use crate::uia::{self, FocusSample};
-use std::sync::mpsc::{self, SyncSender, RecvTimeoutError};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use windows::core::{implement, Ref, Result as WinResult};
@@ -40,7 +40,11 @@ pub(crate) fn make_guard_handler(
     sender: SyncSender<()>,
     epoch: Arc<AtomicU64>,
 ) -> IUIAutomationFocusChangedEventHandler {
-    FocusEventRelay { sender, epoch: Some(epoch) }.into()
+    FocusEventRelay {
+        sender,
+        epoch: Some(epoch),
+    }
+    .into()
 }
 
 fn run_on_mta() -> Result<(), String> {
@@ -49,16 +53,22 @@ fn run_on_mta() -> Result<(), String> {
         .map_err(|e| format!("COM init failed: {e}"))?;
     struct ComGuard;
     impl Drop for ComGuard {
-        fn drop(&mut self) { unsafe { CoUninitialize() }; }
+        fn drop(&mut self) {
+            unsafe { CoUninitialize() };
+        }
     }
     let _com_guard = ComGuard;
 
-    let automation: IUIAutomation = unsafe {
-        CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
-    }.map_err(|e| format!("Cannot start UI Automation: {e}"))?;
+    let automation: IUIAutomation =
+        unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }
+            .map_err(|e| format!("Cannot start UI Automation: {e}"))?;
 
     let (tx, rx) = mpsc::sync_channel(1);
-    let handler: IUIAutomationFocusChangedEventHandler = FocusEventRelay { sender: tx, epoch: None }.into();
+    let handler: IUIAutomationFocusChangedEventHandler = FocusEventRelay {
+        sender: tx,
+        epoch: None,
+    }
+    .into();
     unsafe { automation.AddFocusChangedEventHandler(None, &handler) }
         .map_err(|e| format!("Register focus handler failed: {e}"))?;
 
@@ -71,7 +81,10 @@ fn run_on_mta() -> Result<(), String> {
 
     // Capture the initial state to distinguish lack of events from no movement.
     let initial = uia::sample_from_query(uia::query_focused());
-    println!("initial: pid={} classification={:?}", initial.pid, initial.safety);
+    println!(
+        "initial: pid={} classification={:?}",
+        initial.pid, initial.safety
+    );
     let mut previous: Option<FocusSample> = Some(initial);
 
     while Instant::now() < until {
@@ -84,7 +97,10 @@ fn run_on_mta() -> Result<(), String> {
                 // focus change might occur between the event and this query.
                 let current = uia::sample_from_query(uia::query_focused());
                 if previous != Some(current) {
-                    println!("event: pid={} classification={:?}", current.pid, current.safety);
+                    println!(
+                        "event: pid={} classification={:?}",
+                        current.pid, current.safety
+                    );
                     previous = Some(current);
                     transitions += 1;
                 }
@@ -104,8 +120,14 @@ fn run_on_mta() -> Result<(), String> {
 pub fn run_event_watch() -> i32 {
     match std::thread::spawn(run_on_mta).join() {
         Ok(Ok(())) => 0,
-        Ok(Err(e)) => { eprintln!("UIA event watch: {e}"); 1 }
-        Err(_) => { eprintln!("UIA event watch thread panicked"); 1 }
+        Ok(Err(e)) => {
+            eprintln!("UIA event watch: {e}");
+            1
+        }
+        Err(_) => {
+            eprintln!("UIA event watch thread panicked");
+            1
+        }
     }
 }
 

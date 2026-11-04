@@ -22,7 +22,8 @@ pub fn classify(is_password: Option<bool>, has_focus: Option<bool>) -> FocusSafe
 #[cfg(windows)]
 pub(crate) fn query_focused() -> Result<(i32, FocusSafety), String> {
     use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
+        COINIT_MULTITHREADED,
     };
     use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation};
 
@@ -41,18 +42,21 @@ pub(crate) fn query_focused() -> Result<(i32, FocusSafety), String> {
     let _com_guard = ComGuard;
 
     // Both COM interface objects are scoped to this MTA thread.
-    let automation: IUIAutomation = unsafe {
-        CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
-    }
-    .map_err(|e| format!("UI Automation initialization failed: {e}"))?;
+    let automation: IUIAutomation =
+        unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }
+            .map_err(|e| format!("UI Automation initialization failed: {e}"))?;
 
     let element = unsafe { automation.GetFocusedElement() }
         .map_err(|e| format!("GetFocusedElement failed: {e}"))?;
 
     // Do NOT query Value, TextPattern, Name, or other user content.
     let pid = unsafe { element.CurrentProcessId() }.unwrap_or_default();
-    let password = unsafe { element.CurrentIsPassword() }.ok().map(|v| v.as_bool());
-    let focused = unsafe { element.CurrentHasKeyboardFocus() }.ok().map(|v| v.as_bool());
+    let password = unsafe { element.CurrentIsPassword() }
+        .ok()
+        .map(|v| v.as_bool());
+    let focused = unsafe { element.CurrentHasKeyboardFocus() }
+        .ok()
+        .map(|v| v.as_bool());
 
     Ok((pid, classify(password, focused)))
 }
@@ -119,7 +123,10 @@ pub struct FocusSample {
 pub fn sample_from_query(result: Result<(i32, FocusSafety), String>) -> FocusSample {
     match result {
         Ok((pid, safety)) if pid > 0 => FocusSample { pid, safety },
-        _ => FocusSample { pid: 0, safety: FocusSafety::Unknown },
+        _ => FocusSample {
+            pid: 0,
+            safety: FocusSafety::Unknown,
+        },
     }
 }
 
@@ -127,7 +134,9 @@ pub fn sample_from_query(result: Result<(i32, FocusSafety), String>) -> FocusSam
 /// Polling can miss quick transitions and is NOT a production authorization signal.
 /// No keyboard hook, injected input, control name or text access is used.
 pub fn run_watch_diagnostic() -> i32 {
-    println!("UIA focus watch: 20 seconds. Switch among a normal field, password field, and desktop.");
+    println!(
+        "UIA focus watch: 20 seconds. Switch among a normal field, password field, and desktop."
+    );
     println!("This is read-only; process ID and classification are the only reported values.");
 
     let worker = std::thread::spawn(|| {
@@ -142,7 +151,10 @@ pub fn run_watch_diagnostic() -> i32 {
             let current = sample_from_query(Err("Windows required".to_owned()));
 
             if previous != Some(current) {
-                println!("focus: pid={} classification={:?}", current.pid, current.safety);
+                println!(
+                    "focus: pid={} classification={:?}",
+                    current.pid, current.safety
+                );
                 previous = Some(current);
                 transitions += 1;
             }
@@ -170,17 +182,31 @@ mod focus_watch_tests {
 
     #[test]
     fn missing_process_and_failed_queries_are_unknown() {
-        assert_eq!(sample_from_query(Err("COM failure".into())), FocusSample {
-            pid: 0, safety: FocusSafety::Unknown
-        });
-        assert_eq!(sample_from_query(Ok((0, FocusSafety::NonPassword))), FocusSample {
-            pid: 0, safety: FocusSafety::Unknown
-        });
+        assert_eq!(
+            sample_from_query(Err("COM failure".into())),
+            FocusSample {
+                pid: 0,
+                safety: FocusSafety::Unknown
+            }
+        );
+        assert_eq!(
+            sample_from_query(Ok((0, FocusSafety::NonPassword))),
+            FocusSample {
+                pid: 0,
+                safety: FocusSafety::Unknown
+            }
+        );
     }
 
     #[test]
     fn valid_process_preserves_safe_and_sensitive_classifications() {
-        assert_eq!(sample_from_query(Ok((42, FocusSafety::Password))).safety, FocusSafety::Password);
-        assert_eq!(sample_from_query(Ok((42, FocusSafety::NonPassword))).safety, FocusSafety::NonPassword);
+        assert_eq!(
+            sample_from_query(Ok((42, FocusSafety::Password))).safety,
+            FocusSafety::Password
+        );
+        assert_eq!(
+            sample_from_query(Ok((42, FocusSafety::NonPassword))).safety,
+            FocusSafety::NonPassword
+        );
     }
 }

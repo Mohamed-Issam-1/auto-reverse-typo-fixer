@@ -3,8 +3,8 @@
 use crate::app::App;
 use crate::hook::Hooks;
 use crate::inject::{self, Mode};
-use crate::overlay::Overlay;
 use crate::layout_win;
+use crate::overlay::Overlay;
 use crate::uia;
 use crate::uia_guard;
 use arf_core::config::{self, AppConfig};
@@ -22,7 +22,9 @@ const USAGE: &str = "arf-win [--config <file>] [--dict-dir <dir>] [--selftest] [
 
 fn load_fst(path: &Path) -> Option<Box<dyn Dictionary>> {
     let bytes = std::fs::read(path).ok()?;
-    FstDictionary::from_bytes(bytes).ok().map(|d| Box::new(d) as Box<dyn Dictionary>)
+    FstDictionary::from_bytes(bytes)
+        .ok()
+        .map(|d| Box::new(d) as Box<dyn Dictionary>)
 }
 
 fn build_validator(dir: &Path) -> Validator {
@@ -81,7 +83,13 @@ pub fn selftest() {
             Some(l) => {
                 let text: String = scans
                     .iter()
-                    .map(|s| l.translate(Key { scan: *s, ..Key::default() }).unwrap_or_else(|| "?".into()))
+                    .map(|s| {
+                        l.translate(Key {
+                            scan: *s,
+                            ..Key::default()
+                        })
+                        .unwrap_or_else(|| "?".into())
+                    })
                     .collect();
                 println!("  {hkl:#010x} {:?}: keys H G S G H L -> {text}", l.lang());
             }
@@ -93,7 +101,9 @@ pub fn selftest() {
 /// Looks for a `data` folder with the dictionaries: next to the executable, in the current
 /// directory, or two levels above the executable (running from `target\\release`).
 fn find_dict_dir() -> PathBuf {
-    let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf));
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf));
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(d) = &exe_dir {
         candidates.push(d.join("data"));
@@ -106,12 +116,20 @@ fn find_dict_dir() -> PathBuf {
         .iter()
         .find(|c| c.join("ar.fst").exists() && c.join("en.fst").exists())
         .cloned()
-        .unwrap_or_else(|| candidates.into_iter().next().unwrap_or_else(|| PathBuf::from("data")))
+        .unwrap_or_else(|| {
+            candidates
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| PathBuf::from("data"))
+        })
 }
 
 pub fn run() -> i32 {
-    let mut config_path: Option<PathBuf> = std::env::var_os("APPDATA")
-        .map(|a| PathBuf::from(a).join("AutoReverseTypoFixer").join("config.toml"));
+    let mut config_path: Option<PathBuf> = std::env::var_os("APPDATA").map(|a| {
+        PathBuf::from(a)
+            .join("AutoReverseTypoFixer")
+            .join("config.toml")
+    });
     let mut dict_dir: PathBuf = find_dict_dir();
 
     let mut args = std::env::args().skip(1);
@@ -119,36 +137,61 @@ pub fn run() -> i32 {
         match a.as_str() {
             "--uia-guard-fault-test" => {
                 #[cfg(windows)]
-                { return uia_guard::run_guard_fault_test(); }
+                {
+                    return uia_guard::run_guard_fault_test();
+                }
                 #[cfg(not(windows))]
-                { eprintln!("Requires Windows"); return 1; }
+                {
+                    eprintln!("Requires Windows");
+                    return 1;
+                }
             }
             "--uia-guard-probe" => {
                 #[cfg(windows)]
-                { return uia_guard::run_guard_probe(); }
+                {
+                    return uia_guard::run_guard_probe();
+                }
                 #[cfg(not(windows))]
-                { eprintln!("Requires Windows"); return 1; }
+                {
+                    eprintln!("Requires Windows");
+                    return 1;
+                }
             }
             "--input-queue-stress" => {
                 return crate::hook::run_input_queue_stress();
             }
             "--uia-guard-bench" => {
                 #[cfg(windows)]
-                { return uia_guard::run_guard_bench(); }
+                {
+                    return uia_guard::run_guard_bench();
+                }
                 #[cfg(not(windows))]
-                { eprintln!("Requires Windows"); return 1; }
+                {
+                    eprintln!("Requires Windows");
+                    return 1;
+                }
             }
             "--uia-guard-watch" => {
                 #[cfg(windows)]
-                { return uia_guard::run_guard_watch(); }
+                {
+                    return uia_guard::run_guard_watch();
+                }
                 #[cfg(not(windows))]
-                { eprintln!("Requires Windows"); return 1; }
+                {
+                    eprintln!("Requires Windows");
+                    return 1;
+                }
             }
             "--uia-event-watch" => {
                 #[cfg(windows)]
-                { return crate::uia_events::run_event_watch(); }
+                {
+                    return crate::uia_events::run_event_watch();
+                }
                 #[cfg(not(windows))]
-                { eprintln!("Requires Windows"); return 1; }
+                {
+                    eprintln!("Requires Windows");
+                    return 1;
+                }
             }
             "--uia-watch" => {
                 return uia::run_watch_diagnostic();
@@ -174,7 +217,10 @@ pub fn run() -> i32 {
     }
 
     let cfg: AppConfig = match config_path.as_ref().filter(|p| p.exists()) {
-        Some(p) => match std::fs::read_to_string(p).map_err(|e| e.to_string()).and_then(|t| config::parse(&t)) {
+        Some(p) => match std::fs::read_to_string(p)
+            .map_err(|e| e.to_string())
+            .and_then(|t| config::parse(&t))
+        {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("invalid config {}: {e}", p.display());

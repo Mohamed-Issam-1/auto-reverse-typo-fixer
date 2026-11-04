@@ -6,7 +6,15 @@ use crate::sys::*;
 fn key_input(vk: u16, scan: u16, flags: u32) -> INPUT {
     INPUT {
         type_: INPUT_KEYBOARD,
-        u: INPUT_UNION { ki: KEYBDINPUT { wVk: vk, wScan: scan, dwFlags: flags, time: 0, dwExtraInfo: SIGNATURE } },
+        u: INPUT_UNION {
+            ki: KEYBDINPUT {
+                wVk: vk,
+                wScan: scan,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: SIGNATURE,
+            },
+        },
     }
 }
 
@@ -26,11 +34,20 @@ fn send(inputs: &[INPUT]) -> Result<(), String> {
     if inputs.is_empty() {
         return Ok(());
     }
-    let sent = unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32) };
+    let sent = unsafe {
+        SendInput(
+            inputs.len() as u32,
+            inputs.as_ptr(),
+            std::mem::size_of::<INPUT>() as i32,
+        )
+    };
     if sent as usize == inputs.len() {
         Ok(())
     } else {
-        Err(format!("SendInput accepted {sent} of {} events (blocked by UIPI or another hook?)", inputs.len()))
+        Err(format!(
+            "SendInput accepted {sent} of {} events (blocked by UIPI or another hook?)",
+            inputs.len()
+        ))
     }
 }
 
@@ -44,7 +61,10 @@ fn backspaces_inputs(n: usize) -> Vec<INPUT> {
 }
 
 fn char_inputs(unit: u16) -> [INPUT; 2] {
-    [key_input(0, unit, KEYEVENTF_UNICODE), key_input(0, unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP)]
+    [
+        key_input(0, unit, KEYEVENTF_UNICODE),
+        key_input(0, unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP),
+    ]
 }
 
 /// Deletes `backspaces` characters and types `text`. Output uses `KEYEVENTF_UNICODE`, so it does
@@ -97,7 +117,10 @@ pub fn send_text(text: &str, mode: Mode) -> Result<(), String> {
 }
 
 pub fn send_enter() -> Result<(), String> {
-    send(&[key_input(VK_RETURN, SCAN_ENTER, 0), key_input(VK_RETURN, SCAN_ENTER, KEYEVENTF_KEYUP)])
+    send(&[
+        key_input(VK_RETURN, SCAN_ENTER, 0),
+        key_input(VK_RETURN, SCAN_ENTER, KEYEVENTF_KEYUP),
+    ])
 }
 
 /// Asks the foreground application to switch its input language.
@@ -126,7 +149,8 @@ pub fn wait_modifiers_released(timeout_ms: u64) {
     let start = std::time::Instant::now();
     let down = |vk: i32| unsafe { GetAsyncKeyState(vk) as u16 & 0x8000 != 0 };
     while start.elapsed().as_millis() < timeout_ms as u128 {
-        if !(down(VK_SHIFT) || down(VK_CONTROL) || down(VK_MENU) || down(VK_LWIN) || down(VK_RWIN)) {
+        if !(down(VK_SHIFT) || down(VK_CONTROL) || down(VK_MENU) || down(VK_LWIN) || down(VK_RWIN))
+        {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -151,10 +175,16 @@ mod safety_tests {
     #[test]
     fn paced_mode_is_rejected_before_any_send_even_if_focus_is_safe() {
         let mut calls = 0;
-        let result = send_replacement_via(4, "text", Mode::Paced, || true, |_| {
-            calls += 1;
-            Ok(())
-        });
+        let result = send_replacement_via(
+            4,
+            "text",
+            Mode::Paced,
+            || true,
+            |_| {
+                calls += 1;
+                Ok(())
+            },
+        );
         assert!(result.is_err());
         assert_eq!(calls, 0);
     }
@@ -162,10 +192,16 @@ mod safety_tests {
     #[test]
     fn changed_focus_cancels_batch_without_any_send() {
         let mut calls = 0;
-        let result = send_replacement_via(4, "text", Mode::Batch, || false, |_| {
-            calls += 1;
-            Ok(())
-        });
+        let result = send_replacement_via(
+            4,
+            "text",
+            Mode::Batch,
+            || false,
+            |_| {
+                calls += 1;
+                Ok(())
+            },
+        );
         assert!(result.is_err());
         assert_eq!(calls, 0);
     }
@@ -173,11 +209,17 @@ mod safety_tests {
     #[test]
     fn batch_uses_only_one_send_and_reports_simulated_short_send() {
         let mut calls = 0;
-        let result = send_replacement_via(3, "abc", Mode::Batch, || true, |inputs| {
-            calls += 1;
-            assert_eq!(inputs.len(), 12); // three backspaces + three ASCII letters
-            Err("simulated partial SendInput".to_owned())
-        });
+        let result = send_replacement_via(
+            3,
+            "abc",
+            Mode::Batch,
+            || true,
+            |inputs| {
+                calls += 1;
+                assert_eq!(inputs.len(), 12); // three backspaces + three ASCII letters
+                Err("simulated partial SendInput".to_owned())
+            },
+        );
         assert!(result.is_err());
         assert_eq!(calls, 1);
     }
@@ -186,10 +228,16 @@ mod safety_tests {
     fn activity_during_batch_is_reported_as_failure() {
         use std::cell::Cell;
         let safe = Cell::new(true);
-        let result = send_replacement_via(2, "abc", Mode::Batch, || safe.get(), |_| {
-            safe.set(false); // simulated key press during OS injection
-            Ok(())
-        });
+        let result = send_replacement_via(
+            2,
+            "abc",
+            Mode::Batch,
+            || safe.get(),
+            |_| {
+                safe.set(false); // simulated key press during OS injection
+                Ok(())
+            },
+        );
         assert!(result.is_err());
     }
 }

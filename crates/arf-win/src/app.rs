@@ -3,8 +3,8 @@
 use crate::focus::{is_sensitive_host, FocusCtx, FocusMonitor};
 use crate::hook::{self, RawEvent};
 use crate::inject::{self, Mode};
-use crate::overlay::Overlay;
 use crate::layout_win;
+use crate::overlay::Overlay;
 use crate::sys::HWND;
 use crate::uia_guard::{UiaGuard, WinFocus};
 use arf_core::config::AppConfig;
@@ -59,8 +59,16 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(engine: Engine, cfg: AppConfig, rx: Receiver<RawEvent>, overlay: Option<Overlay>) -> Self {
-        let mods = Mods { caps: inject::caps_lock_on(), ..Mods::default() };
+    pub fn new(
+        engine: Engine,
+        cfg: AppConfig,
+        rx: Receiver<RawEvent>,
+        overlay: Option<Overlay>,
+    ) -> Self {
+        let mods = Mods {
+            caps: inject::caps_lock_on(),
+            ..Mods::default()
+        };
         App {
             engine,
             cfg,
@@ -111,15 +119,23 @@ impl App {
         }
         match ev {
             RawEvent::Mouse | RawEvent::Foreign => self.engine.on_break(),
-            RawEvent::Key { vk, scan, extended, down, activity } => {
-                self.handle_key(vk, scan, extended, down, activity)
-            }
+            RawEvent::Key {
+                vk,
+                scan,
+                extended,
+                down,
+                activity,
+            } => self.handle_key(vk, scan, extended, down, activity),
         }
     }
 
     fn undo_hotkey_matches(&self, vk: u32) -> bool {
         let h = &self.cfg.undo_hotkey;
-        h.vk == vk && h.ctrl == self.mods.ctrl && h.alt == self.mods.alt && h.shift == self.mods.shift && h.win == self.mods.win
+        h.vk == vk
+            && h.ctrl == self.mods.ctrl
+            && h.alt == self.mods.alt
+            && h.shift == self.mods.shift
+            && h.win == self.mods.win
     }
 
     fn handle_key(&mut self, vk: u32, sc: u16, extended: bool, down: bool, activity: u64) {
@@ -138,7 +154,11 @@ impl App {
             self.last_focus = (ctx.hwnd, ctx.focus);
             self.engine.on_break();
         }
-        let verdict = self.uia.verdict(WinFocus { hwnd: ctx.hwnd, focus: ctx.focus, pid: ctx.pid });
+        let verdict = self.uia.verdict(WinFocus {
+            hwnd: ctx.hwnd,
+            focus: ctx.focus,
+            pid: ctx.pid,
+        });
         // A focus event must break the buffered run even when the top-level
         // window and the Win32 focus HWND remain unchanged.
         if self.last_uia_epoch != Some(verdict.epoch) {
@@ -174,7 +194,11 @@ impl App {
             scan::SPACE => self.on_space(now, &ctx, verdict.epoch, activity),
             scan::BACKSPACE => self.engine.on_backspace(now),
             s if scan::is_typing_key(s) => {
-                let key = Key { scan: s, shift: self.mods.shift, caps: self.mods.caps };
+                let key = Key {
+                    scan: s,
+                    shift: self.mods.shift,
+                    caps: self.mods.caps,
+                };
                 self.engine.on_key(key, ctx.hkl as u64, now);
             }
             _ => self.engine.on_break(), // Enter, Tab, Esc, F-keys, numpad, ...
@@ -219,7 +243,9 @@ impl App {
         while let Ok(ev) = self.rx.try_recv() {
             self.pending.push_back(ev);
         }
-        if self.pending.iter().any(RawEvent::is_press) || !self.safe_for_activity(ctx, epoch, activity) {
+        if self.pending.iter().any(RawEvent::is_press)
+            || !self.safe_for_activity(ctx, epoch, activity)
+        {
             self.engine.on_break();
             self.expected = None;
             return;
@@ -235,8 +261,14 @@ impl App {
     /// Recheck context and event generation immediately before changing text.
     /// This does not make missed UIA events impossible; browser denylist remains.
     fn still_safe(&mut self, original: &FocusCtx, epoch: u64) -> bool {
-        let Some(current) = self.focus.current() else { return false };
-        let verdict = self.uia.verdict(WinFocus { hwnd: current.hwnd, focus: current.focus, pid: current.pid });
+        let Some(current) = self.focus.current() else {
+            return false;
+        };
+        let verdict = self.uia.verdict(WinFocus {
+            hwnd: current.hwnd,
+            focus: current.focus,
+            pid: current.pid,
+        });
         self.cfg.enabled
             && verdict.allows_text()
             && verdict.epoch == epoch
@@ -267,19 +299,27 @@ impl App {
             self.engine.on_break();
             return;
         }
-        let Some(c) = self.engine.on_space(now) else { return };
+        let Some(c) = self.engine.on_space(now) else {
+            return;
+        };
 
         // If anything else was pressed since the Space, the text in the application is no
         // longer what we computed: abort instead of deleting the wrong characters.
         while let Ok(ev) = self.rx.try_recv() {
             self.pending.push_back(ev);
         }
-        if self.pending.iter().any(RawEvent::is_press) || !self.safe_for_activity(ctx, epoch, activity) {
+        if self.pending.iter().any(RawEvent::is_press)
+            || !self.safe_for_activity(ctx, epoch, activity)
+        {
             self.engine.on_break();
             return;
         }
         let mode = self.mode_for(&ctx.process);
-        if inject::send_replacement_checked(c.backspaces, &c.text, mode, || self.safe_for_activity(ctx, epoch, activity)).is_err() {
+        if inject::send_replacement_checked(c.backspaces, &c.text, mode, || {
+            self.safe_for_activity(ctx, epoch, activity)
+        })
+        .is_err()
+        {
             self.engine.on_break();
             return;
         }
@@ -315,9 +355,15 @@ impl App {
             return;
         }
         // Preview without mutating engine state; only commit after a complete rewrite.
-        let Some(plan) = self.engine.prepare_undo(now) else { return };
+        let Some(plan) = self.engine.prepare_undo(now) else {
+            return;
+        };
         let mode = self.mode_for(&ctx.process);
-        if inject::send_replacement_checked(plan.backspaces, &plan.text, mode, || self.safe_for_activity(ctx, epoch, activity)).is_err() {
+        if inject::send_replacement_checked(plan.backspaces, &plan.text, mode, || {
+            self.safe_for_activity(ctx, epoch, activity)
+        })
+        .is_err()
+        {
             self.engine.on_break();
             return;
         }

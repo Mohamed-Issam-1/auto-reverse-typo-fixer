@@ -36,7 +36,9 @@ impl DeliveryState {
     }
 }
 
-static EVENT_DELIVERY: DeliveryState = DeliveryState { failed: AtomicBool::new(false) };
+static EVENT_DELIVERY: DeliveryState = DeliveryState {
+    failed: AtomicBool::new(false),
+};
 
 /// The worker must never rewrite text after even one dropped hook event.
 pub fn event_stream_healthy() -> bool {
@@ -57,14 +59,22 @@ pub fn run_input_queue_stress() -> i32 {
     }
     let elapsed = started.elapsed();
     let queued = rx.try_iter().count();
-    let passed = accepted == INPUT_QUEUE_CAPACITY
-        && queued == INPUT_QUEUE_CAPACITY
-        && !delivery.healthy();
-    println!("Synthetic input queue: capacity={} accepted={} buffered={} in {:?}",
-        INPUT_QUEUE_CAPACITY, accepted, queued, elapsed);
-    println!("Overflow permanently disables correction: {}", !delivery.healthy());
+    let passed =
+        accepted == INPUT_QUEUE_CAPACITY && queued == INPUT_QUEUE_CAPACITY && !delivery.healthy();
+    println!(
+        "Synthetic input queue: capacity={} accepted={} buffered={} in {:?}",
+        INPUT_QUEUE_CAPACITY, accepted, queued, elapsed
+    );
+    println!(
+        "Overflow permanently disables correction: {}",
+        !delivery.healthy()
+    );
     println!("No keyboard hooks, COM, user text, or injection were accessed.");
-    if passed { 0 } else { 1 }
+    if passed {
+        0
+    } else {
+        1
+    }
 }
 
 /// Monotonic generation for physical key presses, mouse clicks, and foreign input.
@@ -76,7 +86,9 @@ struct ActivityTracker {
 
 impl ActivityTracker {
     fn note_input(&self) -> u64 {
-        self.generation.fetch_add(1, Ordering::SeqCst).wrapping_add(1)
+        self.generation
+            .fetch_add(1, Ordering::SeqCst)
+            .wrapping_add(1)
     }
 
     fn current(&self) -> u64 {
@@ -88,7 +100,9 @@ impl ActivityTracker {
     }
 }
 
-static INPUT_ACTIVITY: ActivityTracker = ActivityTracker { generation: AtomicU64::new(0) };
+static INPUT_ACTIVITY: ActivityTracker = ActivityTracker {
+    generation: AtomicU64::new(0),
+};
 
 /// Used by the worker to reject a rewrite if any newer real input arrived.
 pub fn activity_is_current(event_generation: u64) -> bool {
@@ -97,7 +111,13 @@ pub fn activity_is_current(event_generation: u64) -> bool {
 
 #[derive(Clone, Copy, Debug)]
 pub enum RawEvent {
-    Key { vk: u32, scan: u16, extended: bool, down: bool, activity: u64 },
+    Key {
+        vk: u32,
+        scan: u16,
+        extended: bool,
+        down: bool,
+        activity: u64,
+    },
     /// Input injected by another program: positions in the target app are no longer trustworthy.
     Foreign,
     Mouse,
@@ -137,7 +157,11 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
                 emit(RawEvent::Foreign);
             }
         } else {
-            let activity = if down { INPUT_ACTIVITY.note_input() } else { INPUT_ACTIVITY.current() };
+            let activity = if down {
+                INPUT_ACTIVITY.note_input()
+            } else {
+                INPUT_ACTIVITY.current()
+            };
             emit(RawEvent::Key {
                 vk: k.vkCode,
                 scan: k.scanCode as u16,
@@ -152,7 +176,10 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
 
 unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code == HC_ACTION
-        && matches!(wparam as u32, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN)
+        && matches!(
+            wparam as u32,
+            WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN
+        )
     {
         INPUT_ACTIVITY.note_input();
         emit(RawEvent::Mouse);
@@ -167,7 +194,8 @@ pub struct Hooks {
 
 impl Hooks {
     pub fn install(tx: SyncSender<RawEvent>) -> Result<Hooks, String> {
-        TX.set(tx).map_err(|_| "hooks already installed".to_string())?;
+        TX.set(tx)
+            .map_err(|_| "hooks already installed".to_string())?;
         unsafe {
             let module = GetModuleHandleW(std::ptr::null());
             let kb = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), module, 0);

@@ -2,7 +2,7 @@
 //! No key events or user text enter this module. UIA cannot authorize browser
 //! correction yet: the separate browser denylist remains mandatory.
 
-use crate::uia::{FocusSample, FocusSafety};
+use crate::uia::{FocusSafety, FocusSample};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -85,7 +85,9 @@ impl UiaGuard {
                 });
             if let Err(error) = spawned {
                 mark_monitor_stopped(&guard.monitor_healthy, &guard.epoch, &guard.latest);
-                eprintln!("warning: cannot spawn UIA safety monitor: {error}; correction remains blocked");
+                eprintln!(
+                    "warning: cannot spawn UIA safety monitor: {error}; correction remains blocked"
+                );
             }
         }
         guard
@@ -116,17 +118,16 @@ impl UiaGuard {
             }
             _ => FocusSafety::Unknown,
         };
-        UiaVerdict { epoch: after, safety }
+        UiaVerdict {
+            epoch: after,
+            safety,
+        }
     }
 }
 
 /// Revoke every authorization as soon as the monitor stops. A stalled monitor
 /// is additionally guarded by MAX_SAMPLE_AGE even if no exit is observable.
-fn mark_monitor_stopped(
-    healthy: &AtomicBool,
-    epoch: &AtomicU64,
-    latest: &Mutex<Option<Cached>>,
-) {
+fn mark_monitor_stopped(healthy: &AtomicBool, epoch: &AtomicU64, latest: &Mutex<Option<Cached>>) {
     healthy.store(false, Ordering::Release);
     epoch.fetch_add(1, Ordering::AcqRel);
     if let Ok(mut value) = latest.lock() {
@@ -142,19 +143,29 @@ impl Drop for UiaGuard {
 
 #[cfg(windows)]
 fn read_win_focus() -> Option<WinFocus> {
-    use crate::sys::{GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO};
+    use crate::sys::{
+        GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
+    };
     unsafe {
         let hwnd = GetForegroundWindow();
-        if hwnd == 0 { return None; }
+        if hwnd == 0 {
+            return None;
+        }
         let mut pid = 0u32;
         let tid = GetWindowThreadProcessId(hwnd, &mut pid);
-        if tid == 0 || pid == 0 { return None; }
+        if tid == 0 || pid == 0 {
+            return None;
+        }
         let mut info: GUITHREADINFO = std::mem::zeroed();
         info.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
         if GetGUIThreadInfo(tid, &mut info) == 0 || info.hwndFocus == 0 {
             return None; // The active edit control is unknown; fail closed.
         }
-        Some(WinFocus { hwnd, focus: info.hwndFocus, pid })
+        Some(WinFocus {
+            hwnd,
+            focus: info.hwndFocus,
+            pid,
+        })
     }
 }
 
@@ -167,7 +178,8 @@ fn run_monitor(
     use crate::uia::{query_focused, sample_from_query};
     use std::sync::mpsc::{self, RecvTimeoutError};
     use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
+        COINIT_MULTITHREADED,
     };
     use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation};
 
@@ -182,10 +194,9 @@ fn run_monitor(
     }
     let _com_guard = ComGuard;
 
-    let automation: IUIAutomation = unsafe {
-        CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
-    }
-    .map_err(|e| format!("UI Automation creation failed: {e}"))?;
+    let automation: IUIAutomation =
+        unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }
+            .map_err(|e| format!("UI Automation creation failed: {e}"))?;
 
     let (sender, receiver) = mpsc::sync_channel(1);
     // The COM callback increments epoch BEFORE queuing an event, immediately
@@ -206,14 +217,20 @@ fn run_monitor(
         // If UIA and Win32 focus disagree, or focus moved during the
         // query, never publish an authorizing result.
         let verified = match (before_win, after_win) {
-            (Some(a), Some(b)) if before == after
-                && a == b && sample.pid > 0 && sample.pid as u32 == b.pid => Some(b),
+            (Some(a), Some(b))
+                if before == after && a == b && sample.pid > 0 && sample.pid as u32 == b.pid =>
+            {
+                Some(b)
+            }
             _ => None,
         };
         match latest.lock() {
             Ok(mut state) => {
                 *state = verified.map(|win| Cached {
-                    sample, win, epoch: after, checked_at: Instant::now(),
+                    sample,
+                    win,
+                    epoch: after,
+                    checked_at: Instant::now(),
                 });
             }
             Err(_) => break Err("UIA safety state lock failed".to_owned()),
@@ -260,8 +277,13 @@ pub fn run_guard_probe() -> i32 {
                         FocusSafety::Unknown
                     }
                 };
-                println!("UIA probe {}/{}: {:?}, {:.3} ms",
-                    index + 1, COUNT, class, elapsed.as_secs_f64() * 1000.0);
+                println!(
+                    "UIA probe {}/{}: {:?}, {:.3} ms",
+                    index + 1,
+                    COUNT,
+                    class,
+                    elapsed.as_secs_f64() * 1000.0
+                );
                 std::thread::sleep(Duration::from_millis(80));
             }
             latencies.sort_unstable();
@@ -269,8 +291,10 @@ pub fn run_guard_probe() -> i32 {
             let p95_index = ((COUNT * 95).div_ceil(100) - 1).min(COUNT - 1);
             let p95 = latencies[p95_index].as_secs_f64() * 1000.0;
             let maximum = latencies[COUNT - 1].as_secs_f64() * 1000.0;
-            println!("UIA probe summary: success={} errors={} p50={:.3}ms p95={:.3}ms max={:.3}ms",
-                good, errors, p50, p95, maximum);
+            println!(
+                "UIA probe summary: success={} errors={} p50={:.3}ms p95={:.3}ms max={:.3}ms",
+                good, errors, p50, p95, maximum
+            );
             println!("No text, keyboard hooks, or injected input were accessed.");
             let _ = sender.try_send(good > 0);
         });
@@ -280,7 +304,10 @@ pub fn run_guard_probe() -> i32 {
     }
     match receiver.recv_timeout(Duration::from_secs(15)) {
         Ok(true) => 0,
-        Ok(false) => { eprintln!("All UIA probe requests failed."); 1 }
+        Ok(false) => {
+            eprintln!("All UIA probe requests failed.");
+            1
+        }
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
             eprintln!("UIA probe exceeded 15 seconds; possible blocked provider.");
             1
@@ -296,19 +323,34 @@ pub fn run_guard_probe() -> i32 {
 #[cfg(windows)]
 pub fn run_guard_fault_test() -> i32 {
     let guard = UiaGuard::empty();
-    let focus = WinFocus { hwnd: 100, focus: 101, pid: 42 };
+    let focus = WinFocus {
+        hwnd: 100,
+        focus: 101,
+        pid: 42,
+    };
     *guard.latest.lock().unwrap() = Some(Cached {
-        sample: FocusSample { pid: 42, safety: FocusSafety::NonPassword },
-        win: focus, epoch: 0, checked_at: Instant::now(),
+        sample: FocusSample {
+            pid: 42,
+            safety: FocusSafety::NonPassword,
+        },
+        win: focus,
+        epoch: 0,
+        checked_at: Instant::now(),
     });
     let before = guard.verdict(focus).allows_text();
     mark_monitor_stopped(&guard.monitor_healthy, &guard.epoch, &guard.latest);
     let after = guard.verdict(focus);
     let cleared = guard.latest.lock().unwrap().is_none();
-    println!("Synthetic monitor failure: previously_allowed={} after={:?} cache_cleared={}",
-        before, after.safety, cleared);
+    println!(
+        "Synthetic monitor failure: previously_allowed={} after={:?} cache_cleared={}",
+        before, after.safety, cleared
+    );
     println!("No UIA, Win32 hooks, input content, or injection were accessed.");
-    if before && !after.allows_text() && cleared { 0 } else { 1 }
+    if before && !after.allows_text() && cleared {
+        0
+    } else {
+        1
+    }
 }
 
 /// Diagnostic only. No hooks, rewriting or input-content access.
@@ -321,10 +363,17 @@ pub fn run_guard_watch() -> i32 {
     let mut previous: Option<(u32, UiaVerdict)> = None;
     while Instant::now() < until {
         let current = read_win_focus();
-        let state = guard.verdict(current.unwrap_or(WinFocus { hwnd: 0, focus: 0, pid: 0 }));
+        let state = guard.verdict(current.unwrap_or(WinFocus {
+            hwnd: 0,
+            focus: 0,
+            pid: 0,
+        }));
         let pid = current.map_or(0, |c| c.pid);
         if previous != Some((pid, state)) {
-            println!("gate: pid={pid} epoch={} classification={:?}", state.epoch, state.safety);
+            println!(
+                "gate: pid={pid} epoch={} classification={:?}",
+                state.epoch, state.safety
+            );
             previous = Some((pid, state));
         }
         std::thread::sleep(Duration::from_millis(80));
@@ -338,9 +387,16 @@ pub fn run_guard_watch() -> i32 {
 #[cfg(windows)]
 pub fn run_guard_bench() -> i32 {
     let guard = UiaGuard::empty();
-    let focus = WinFocus { hwnd: 100, focus: 101, pid: 42 };
+    let focus = WinFocus {
+        hwnd: 100,
+        focus: 101,
+        pid: 42,
+    };
     *guard.latest.lock().unwrap() = Some(Cached {
-        sample: FocusSample { pid: 42, safety: FocusSafety::NonPassword },
+        sample: FocusSample {
+            pid: 42,
+            safety: FocusSafety::NonPassword,
+        },
         win: focus,
         epoch: 0,
         checked_at: Instant::now(),
@@ -349,22 +405,37 @@ pub fn run_guard_bench() -> i32 {
     let started = Instant::now();
     let mut allowed = 0u32;
     for _ in 0..N {
-        if guard.verdict(focus).allows_text() { allowed += 1; }
+        if guard.verdict(focus).allows_text() {
+            allowed += 1;
+        }
     }
     let elapsed = started.elapsed();
     guard.epoch.fetch_add(1, Ordering::AcqRel);
-    let denied = (0..N).filter(|_| !guard.verdict(focus).allows_text()).count();
-    println!("Cached gate: {N} checks in {:?}; allowed={allowed}", elapsed);
+    let denied = (0..N)
+        .filter(|_| !guard.verdict(focus).allows_text())
+        .count();
+    println!(
+        "Cached gate: {N} checks in {:?}; allowed={allowed}",
+        elapsed
+    );
     println!("After invalidation: {denied}/{N} checks denied");
     println!("No input content, Win32 hooks, UIA services, or injection were accessed.");
-    if denied != N as usize { 1 } else { 0 }
+    if denied != N as usize {
+        1
+    } else {
+        0
+    }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn context() -> WinFocus {
-        WinFocus { hwnd: 100, focus: 101, pid: 42 }
+        WinFocus {
+            hwnd: 100,
+            focus: 101,
+            pid: 42,
+        }
     }
 
     fn record(guard: &UiaGuard, safety: FocusSafety, age: Duration) {
@@ -391,9 +462,24 @@ mod tests {
     fn unknown_process_or_missing_focus_never_authorizes() {
         let guard = UiaGuard::empty();
         record(&guard, FocusSafety::NonPassword, Duration::ZERO);
-        assert!(!guard.verdict(WinFocus { pid: 0, ..context() }).allows_text());
-        assert!(!guard.verdict(WinFocus { focus: 0, ..context() }).allows_text());
-        assert!(!guard.verdict(WinFocus { hwnd: 0, ..context() }).allows_text());
+        assert!(!guard
+            .verdict(WinFocus {
+                pid: 0,
+                ..context()
+            })
+            .allows_text());
+        assert!(!guard
+            .verdict(WinFocus {
+                focus: 0,
+                ..context()
+            })
+            .allows_text());
+        assert!(!guard
+            .verdict(WinFocus {
+                hwnd: 0,
+                ..context()
+            })
+            .allows_text());
     }
     #[test]
     fn fails_closed_until_matching_fresh_non_password_sample() {
@@ -401,9 +487,24 @@ mod tests {
         assert!(!guard.verdict(context()).allows_text());
         record(&guard, FocusSafety::NonPassword, Duration::ZERO);
         assert!(guard.verdict(context()).allows_text());
-        assert!(!guard.verdict(WinFocus { pid: 41, ..context() }).allows_text());
-        assert!(!guard.verdict(WinFocus { focus: 102, ..context() }).allows_text());
-        assert!(!guard.verdict(WinFocus { hwnd: 102, ..context() }).allows_text());
+        assert!(!guard
+            .verdict(WinFocus {
+                pid: 41,
+                ..context()
+            })
+            .allows_text());
+        assert!(!guard
+            .verdict(WinFocus {
+                focus: 102,
+                ..context()
+            })
+            .allows_text());
+        assert!(!guard
+            .verdict(WinFocus {
+                hwnd: 102,
+                ..context()
+            })
+            .allows_text());
         record(&guard, FocusSafety::Password, Duration::ZERO);
         assert!(!guard.verdict(context()).allows_text());
         record(&guard, FocusSafety::Unknown, Duration::ZERO);
