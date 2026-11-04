@@ -368,8 +368,7 @@ impl Engine {
 
         let mut words = Vec::new();
         let (mut backspaces, mut text, mut original_text) = (0, String::new(), String::new());
-        for i in first..=idx {
-            let wi = &run[i];
+        for wi in run.iter().take(idx + 1).skip(first) {
             let corrected = translate_keys(wi.keys(), target)?;
             let original = wi.typed();
             let spaces = " ".repeat(wi.trailing_spaces);

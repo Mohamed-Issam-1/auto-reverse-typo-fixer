@@ -101,6 +101,14 @@ fn run_on_mta() -> Result<(), String> {
     Ok(())
 }
 
+pub fn run_event_watch() -> i32 {
+    match std::thread::spawn(run_on_mta).join() {
+        Ok(Ok(())) => 0,
+        Ok(Err(e)) => { eprintln!("UIA event watch: {e}"); 1 }
+        Err(_) => { eprintln!("UIA event watch thread panicked"); 1 }
+    }
+}
+
 #[cfg(test)]
 mod queue_tests {
     use std::sync::mpsc::{sync_channel, TrySendError};
@@ -111,12 +119,5 @@ mod queue_tests {
         assert!(tx.try_send(()).is_ok());
         assert!(matches!(tx.try_send(()), Err(TrySendError::Full(()))));
         assert!(rx.try_recv().is_ok());
-    }
-}
-pub fn run_event_watch() -> i32 {
-    match std::thread::spawn(run_on_mta).join() {
-        Ok(Ok(())) => 0,
-        Ok(Err(e)) => { eprintln!("UIA event watch: {e}"); 1 }
-        Err(_) => { eprintln!("UIA event watch thread panicked"); 1 }
     }
 }

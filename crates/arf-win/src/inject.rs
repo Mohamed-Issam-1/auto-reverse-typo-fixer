@@ -133,6 +133,10 @@ pub fn wait_modifiers_released(timeout_ms: u64) {
     }
 }
 
+pub fn caps_lock_on() -> bool {
+    unsafe { GetKeyState(VK_CAPITAL) & 1 != 0 }
+}
+
 #[cfg(test)]
 mod safety_tests {
     use super::*;
@@ -188,7 +192,4 @@ mod safety_tests {
         });
         assert!(result.is_err());
     }
-}
-pub fn caps_lock_on() -> bool {
-    unsafe { GetKeyState(VK_CAPITAL) & 1 != 0 }
 }

@@ -169,8 +169,7 @@ fn user_dictionary_protects_words() {
 
 #[test]
 fn disabled_source_language() {
-    let mut cfg = Config::default();
-    cfg.correct_from = vec![Lang::Arabic];
+    let cfg = Config { correct_from: vec![Lang::Arabic], ..Config::default() };
     let (mut e, mut t) = (engine_with(cfg), Typist::new());
     assert!(t.word(&mut e, EN, "hgsghl").is_none());
     assert!(t.word(&mut e, AR, "اثممخ").is_some());
@@ -350,8 +349,7 @@ fn undo_expires_and_is_cleared_by_next_key() {
 #[test]
 fn rejected_words_are_not_dragged_into_later_corrections() {
     use crate::decision::UndoPause;
-    let mut cfg = Config::default();
-    cfg.undo_pause = UndoPause::None;
+    let cfg = Config { undo_pause: UndoPause::None, ..Config::default() };
     let (mut e, mut t) = (engine_with(cfg), Typist::new());
     assert!(t.word(&mut e, EN, "td").is_none());
     let c = t.word(&mut e, EN, "hgsghl").unwrap();
@@ -404,8 +402,7 @@ fn tier_b_is_off_in_conservative_mode() {
 // ---------- undo policy ----------
 
 fn undone_engine(pause: crate::decision::UndoPause) -> (Engine, Typist) {
-    let mut cfg = Config::default();
-    cfg.undo_pause = pause;
+    let cfg = Config { undo_pause: pause, ..Config::default() };
     let (mut e, mut t) = (engine_with(cfg), Typist::new());
     let c = t.word(&mut e, EN, "hgsghl").unwrap();
     e.commit(&c, t.now);

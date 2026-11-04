@@ -266,7 +266,7 @@ pub fn run_guard_probe() -> i32 {
             }
             latencies.sort_unstable();
             let p50 = latencies[COUNT / 2].as_secs_f64() * 1000.0;
-            let p95_index = (((COUNT * 95 + 99) / 100) - 1).min(COUNT - 1);
+            let p95_index = ((COUNT * 95).div_ceil(100) - 1).min(COUNT - 1);
             let p95 = latencies[p95_index].as_secs_f64() * 1000.0;
             let maximum = latencies[COUNT - 1].as_secs_f64() * 1000.0;
             println!("UIA probe summary: success={} errors={} p50={:.3}ms p95={:.3}ms max={:.3}ms",
